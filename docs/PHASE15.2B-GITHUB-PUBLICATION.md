@@ -27,15 +27,16 @@ https://github.com/lalichen169-rgb/stone-erp-ai-assistant.git
 ## 5. Push result
 
 - **Status:** Succeeded (no `--force`).
-- **Updates pushed:** Initial publish (`86f17a8` → `origin/main`), publication report added (`7c88d96` → `origin/main`), publication report corrected (`8eebfc4` → `origin/main`).
+- **Initial publish:** Commit `86f17a8b409817018dd7146d9cea644da0f47d1d` pushed to `origin/main`.
+- **Follow-up commits on `main`:** Additional documentation-only commits record this Phase 15.2B report and corrections. Exact sequence: run `git log origin/main --oneline` after fetching.
 - **Remote:** `origin` → `https://github.com/lalichen169-rgb/stone-erp-ai-assistant.git` (HTTPS, no embedded credentials in the URL).
 - **Branch setup:** Local `main` tracks `origin/main`.
 
 ## 6. File count published
 
-**First commit (`86f17a8b409817018dd7146d9cea644da0f47d1d`):** **288** tracked files (count via `git ls-tree -r --name-only` at that commit).
+**Initial publish commit (`86f17a8b409817018dd7146d9cea644da0f47d1d`):** **288** tracked files (count via `git ls-tree -r --name-only` at that commit).
 
-**Current tip of `main` (includes this report):** **289** tracked files at `8eebfc42ed73ca09c9fcd9887a01743f71e0ad92`.
+**Tip of `main` after documentation follow-ups:** **289** tracked files (one additional Markdown file under `docs/`). **Tip commit hash:** run `git rev-parse origin/main` after `git fetch` — the report does not embed that hash, so this document stays stable across doc-only updates.
 
 **Included as required (in the initial publish commit):**
 
@@ -60,7 +61,7 @@ The following **exact paths are not** in the published tree:
 
 ## 8. Working tree status (after publication)
 
-- **Tracking:** After the last documentation update was pushed, local `main` matched `origin/main` at `8eebfc42ed73ca09c9fcd9887a01743f71e0ad92`. The **initial GitHub publish** remains the root commit `86f17a8b409817018dd7146d9cea644da0f47d1d`; follow-ups were `7c88d963288f041a3079933ab75c9df8c7114a2f` (`docs: add Phase 15.2B GitHub publication report`) and `8eebfc42ed73ca09c9fcd9887a01743f71e0ad92` (`docs: update Phase 15.2B publication report after push`).
+- **Tracking:** After a successful push, `git status` should show `main` in sync with `origin/main` (for example `## main...origin/main` with no “ahead”/“behind”). Confirm with `git fetch` and `git status -sb`.
 - **Untracked:** A stray untracked file `php` (zero-byte or junk) existed at the repo root and was **not** published. Remove or add to `.gitignore` locally if desired.
 
 ## 9. Remaining limitations
