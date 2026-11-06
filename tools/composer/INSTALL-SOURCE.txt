@@ -1,0 +1,27 @@
+StoneERP-AI-Assistant — project-local Composer distribution record
+==================================================================
+
+Composer version: 2.11.1 (2026-10-30)
+
+Official sources:
+  Installer: https://getcomposer.org/installer
+  PHAR:      https://getcomposer.org/download/latest-stable/composer.phar
+
+Installer SHA-384 (verified at install time):
+  c8b085408188070d5f52bcfe4ecfbee5f727afa458b2573b8eaaf77b3419b0bf2768dc67c86944da1544f06fa544fd47
+
+composer.phar SHA-256 (verified at install time):
+  6f1b891e1d4927d62740276c540fb490e47689e19e102c49e8da849794882f8c
+
+Installed to:
+  D:\MARCOM_PROJECTS\PrivateProjects\StoneERP-AI-Assistant\tools\composer\composer.phar
+
+Execution model:
+  tools\php\php.exe tools\composer\composer.phar [arguments]
+
+Composer home (config, keys): tools\composer\home\
+Composer cache:               tools\composer\cache\
+
+Installed: 2026-11-05
+
+Global Composer at C:\Users\lalichen.j\AppData\Local\ComposerSetup\ was not modified.

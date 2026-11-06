@@ -1,0 +1,84 @@
+/.phpunit.cache
+/node_modules
+/public/build
+/public/hot
+/public/storage
+/storage/*.key
+/storage/pail
+/vendor
+.env
+.env.testing
+.env.backup
+
+# Docker Compose secrets (see docker/compose.env.example)
+docker/compose.env
+.env.production
+.phpactor.json
+.phpunit.result.cache
+Homestead.json
+Homestead.yaml
+npm-debug.log
+yarn-error.log
+
+# Project-local npm cache (see .npmrc)
+/tools/npm-cache/
+/auth.json
+/tools/composer/cache/
+/tools/composer/home/
+# Composer PHAR is downloaded locally — not part of the repository (see README)
+/tools/composer/composer.phar
+
+# Project-local PHP runtime (ignore binaries; keep INSTALL-SOURCE.txt / redist docs)
+/tools/php/**
+!/tools/php/INSTALL-SOURCE.txt
+!/tools/php/README.md
+!/tools/php/readme-redist-bins.txt
+
+# Default Laravel log output (directory may be recreated)
+/storage/logs/
+*.log
+
+# Local SQLite database files (MySQL is primary; sqlite is optional)
+/database/database.sqlite
+/database/*.sqlite
+
+# OS noise
+Thumbs.db
+Desktop.ini
+
+/.fleet
+/.idea
+/.nova
+/.vscode
+/.zed
+
+# Project-local MySQL (binaries, data, logs, downloads — keep my.ini + INSTALL-SOURCE in repo)
+/tools/mysql/server/
+/tools/mysql/data/
+/tools/mysql/logs/
+/tools/.download-cache/
+/tools/mysql/**/*.err
+
+# Project-local Memurai (binaries, runtime, logs — keep memurai.conf + Samples in repo)
+/tools/memurai/memurai.exe
+/tools/memurai/memurai-cli.exe
+/tools/memurai/memurai-check-aof.exe
+/tools/memurai/memurai-check-rdb.exe
+/tools/memurai/*.dll
+/tools/memurai/data/
+/tools/memurai/run/
+/tools/memurai/memurai-log.txt
+/tools/memurai/dump.rdb
+/tools/memurai/*.duplicate*
+/tools/memurai/**/*.duplicate*
+
+# Memurai MSI extract / helper tooling (local install artifacts)
+/Memurai-for-Redis-v8.2.0/
+/tools/lessmsi/
+/tools/7zip/
+/tools/downloads/
+
+# Optional: ignore loose Memurai licence/EULA copies from extract (keep memurai-license-dev.txt if you track it)
+/tools/memurai/Memurai-For-Redis-EULA.rtf
+/tools/memurai/Open-Source-Licenses.txt
+/tools/memurai/Release-Notes.txt

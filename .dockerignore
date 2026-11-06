@@ -1,0 +1,50 @@
+# Dependencies (installed in image)
+/node_modules
+/vendor
+
+# Git and IDE
+/.git
+/.github
+/.idea
+/.vscode
+/.zed
+/.fleet
+/.phpactor.json
+
+# Local env and secrets — never bake into images
+/.env
+/.env.*
+!/.env.example
+/docker/compose.env
+
+# Build outputs (rebuilt in image)
+/public/build
+/public/hot
+
+# Laravel writable paths (use volumes at runtime if needed)
+/storage/*.key
+/storage/app/*
+!/storage/app/.gitignore
+/storage/framework/cache/*
+!/storage/framework/cache/.gitignore
+/storage/framework/sessions/*
+!/storage/framework/sessions/.gitignore
+/storage/framework/views/*
+!/storage/framework/views/.gitignore
+/storage/logs/*
+!/storage/logs/.gitignore
+
+# PHPUnit / tooling caches
+/.phpunit.cache
+/.phpunit.result.cache
+
+# Project-local Windows tooling (not used inside Linux containers)
+/tools
+/Memurai-for-Redis-v8.2.0
+
+# Tests (optional: keep out of production image to reduce size)
+/tests
+
+# Misc
+npm-debug.log
+yarn-error.log
