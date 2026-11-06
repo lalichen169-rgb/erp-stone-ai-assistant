@@ -27,7 +27,7 @@ https://github.com/lalichen169-rgb/stone-erp-ai-assistant.git
 ## 5. Push result
 
 - **Status:** Succeeded (no `--force`).
-- **Updates pushed:** Initial publish (`86f17a8` → `origin/main`), then follow-up doc commit (`7c88d96` → `origin/main`).
+- **Updates pushed:** Initial publish (`86f17a8` → `origin/main`), publication report added (`7c88d96` → `origin/main`), publication report corrected (`8eebfc4` → `origin/main`).
 - **Remote:** `origin` → `https://github.com/lalichen169-rgb/stone-erp-ai-assistant.git` (HTTPS, no embedded credentials in the URL).
 - **Branch setup:** Local `main` tracks `origin/main`.
 
@@ -35,7 +35,7 @@ https://github.com/lalichen169-rgb/stone-erp-ai-assistant.git
 
 **First commit (`86f17a8b409817018dd7146d9cea644da0f47d1d`):** **288** tracked files (count via `git ls-tree -r --name-only` at that commit).
 
-**Current tip of `main` (includes this report):** **289** tracked files at `7c88d963288f041a3079933ab75c9df8c7114a2f`.
+**Current tip of `main` (includes this report):** **289** tracked files at `8eebfc42ed73ca09c9fcd9887a01743f71e0ad92`.
 
 **Included as required (in the initial publish commit):**
 
@@ -60,7 +60,7 @@ The following **exact paths are not** in the published tree:
 
 ## 8. Working tree status (after publication)
 
-- **Tracking:** After the documentation commit was pushed, local `main` matched `origin/main` at `7c88d963288f041a3079933ab75c9df8c7114a2f`. The **initial GitHub publish** remains the root commit `86f17a8b409817018dd7146d9cea644da0f47d1d`; this publication report was added in commit `7c88d963288f041a3079933ab75c9df8c7114a2f` (`docs: add Phase 15.2B GitHub publication report`).
+- **Tracking:** After the last documentation update was pushed, local `main` matched `origin/main` at `8eebfc42ed73ca09c9fcd9887a01743f71e0ad92`. The **initial GitHub publish** remains the root commit `86f17a8b409817018dd7146d9cea644da0f47d1d`; follow-ups were `7c88d963288f041a3079933ab75c9df8c7114a2f` (`docs: add Phase 15.2B GitHub publication report`) and `8eebfc42ed73ca09c9fcd9887a01743f71e0ad92` (`docs: update Phase 15.2B publication report after push`).
 - **Untracked:** A stray untracked file `php` (zero-byte or junk) existed at the repo root and was **not** published. Remove or add to `.gitignore` locally if desired.
 
 ## 9. Remaining limitations
