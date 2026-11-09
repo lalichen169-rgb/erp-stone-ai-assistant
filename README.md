@@ -63,27 +63,27 @@ sequenceDiagram
     participant ERP as ERP services
     participant DB as MySQL
 
-    U->>API: POST /api/assistant (message)
-    API->>ARS: authenticated User + message
-    ARS->>CTX: persist user message; resolve follow-up
-    ARS->>PRE: stock / PO / overdue / Sales refusal?
+    U->>API: POST assistant message
+    API->>ARS: authenticated user message
+    ARS->>CTX: persist user message and resolve follow-up
+    ARS->>PRE: stock PO overdue or Sales refusal checks
     alt Deterministic answer
         PRE->>ERP: authorized read
         ERP->>DB: Eloquent queries
-        PRE-->>U: HTTP 200 message (no provider)
+        PRE-->>U: HTTP 200 without provider
     else Provider tool loop
-        ARS->>AI: build context (bounded history)
-        AI->>P: AiRequest (tools + messages)
+        ARS->>AI: build context bounded history
+        AI->>P: AiRequest tools and messages
         P-->>AI: tool calls or text
         loop Each tool call
-            AI->>TE: execute(tool, User)
-            TE->>ERP: business logic + Gates
+            AI->>TE: execute tool for User
+            TE->>ERP: business logic and Gates
             ERP->>DB: queries
-            TE-->>AI: tool result (redacted if needed)
+            TE-->>AI: tool result redacted if needed
         end
-        AI-->>U: HTTP 200 answer (OpenAI/Claude)
+        AI-->>U: HTTP 200 answer OpenAI or Claude
     end
-    Note over ARS,DB: Ollama: accept HTTP 202, queue ProcessOllamaAssistantRun, poll GET /assistant/runs/{id}
+    Note over ARS,DB: Ollama path HTTP 202 queue worker poll run status
 ```
 
 **Numbered flow (synchronous OpenAI/Claude path):**
