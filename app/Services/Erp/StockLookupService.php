@@ -7,11 +7,14 @@ use App\Models\Stock;
 use App\Models\User;
 use App\Models\Warehouse;
 use App\Services\Erp\Concerns\AuthorizesErpUser;
+use App\Services\Erp\Concerns\ResolvesProductAttributeFilters;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
 
 class StockLookupService
 {
     use AuthorizesErpUser;
+    use ResolvesProductAttributeFilters;
 
     /**
      * Search products by SKU, name, material, color, and thickness.
@@ -23,10 +26,11 @@ class StockLookupService
     {
         $this->authorizeProductsAndStock($user);
 
-        return $this->applyProductFilters(Product::query(), $filters)
-            ->orderBy('sku')
-            ->limit($limit)
-            ->get()
+        $resolved = $this->resolveProducts($filters);
+
+        return $resolved['products']
+            ->sortBy('sku')
+            ->take($limit)
             ->map(fn (Product $product) => $this->productSummary($product))
             ->values()
             ->all();
@@ -71,7 +75,8 @@ class StockLookupService
     ): array {
         $this->authorizeProductsAndStock($user);
 
-        $products = $this->applyProductFilters(Product::query(), $productFilters)->get();
+        $resolved = $this->resolveProducts($productFilters);
+        $products = $resolved['products'];
 
         if ($products->isEmpty()) {
             return [
@@ -81,7 +86,33 @@ class StockLookupService
                 'warehouse' => null,
                 'slabs_on_hand' => 0,
                 'has_stock_record' => false,
+                'effective_filters' => $resolved['coerced_filters'] ?? [],
             ];
+        }
+
+        $warehouseQuery = Warehouse::query();
+        $this->applyWarehouseFilters($warehouseQuery, $warehouseFilters);
+        $warehouses = $warehouseQuery->get();
+
+        if ($products->count() > 1 && $warehouses->count() === 1) {
+            $effective = is_array($resolved['coerced_filters'] ?? null) ? $resolved['coerced_filters'] : [];
+            $skuSpecified = ! empty($effective['sku']);
+
+            if (! $skuSpecified) {
+                $levels = $this->stockLevelRowsFor($products, $warehouses);
+                $payload = [
+                    'found' => true,
+                    'multi_product' => true,
+                    'stock_levels' => $levels,
+                    'effective_filters' => $effective,
+                    'stock_summary' => 'found=true; list each stock_levels row with warehouse, material, thickness_cm, SKU, and slabs_on_hand.',
+                ];
+                if ($resolved['resolution'] !== null) {
+                    $payload['filter_resolution'] = $resolved['resolution'];
+                }
+
+                return $payload;
+            }
         }
 
         if ($products->count() > 1) {
@@ -93,10 +124,6 @@ class StockLookupService
                 'has_stock_record' => false,
             ];
         }
-
-        $warehouseQuery = Warehouse::query();
-        $this->applyWarehouseFilters($warehouseQuery, $warehouseFilters);
-        $warehouses = $warehouseQuery->get();
 
         if ($warehouses->isEmpty()) {
             return [
@@ -120,7 +147,13 @@ class StockLookupService
             ];
         }
 
-        return $this->buildStockResult($products->first(), $warehouses->first());
+        $result = $this->buildStockResult($products->first(), $warehouses->first());
+
+        if ($resolved['resolution'] !== null) {
+            $result['filter_resolution'] = $resolved['resolution'];
+        }
+
+        return $result;
     }
 
     /**
@@ -185,22 +218,83 @@ class StockLookupService
     ): array {
         $this->authorizeProductsAndStock($user);
 
+        $resolved = $this->resolveProducts($productFilters);
+
         $query = Stock::query()
             ->with(['product', 'warehouse'])
-            ->whereHas('product', fn (Builder $q) => $this->applyProductFilters($q, $productFilters))
-            ->whereHas('warehouse', fn (Builder $q) => $this->applyWarehouseFilters($q, $warehouseFilters))
+            ->whereHas('warehouse', fn (Builder $q) => $this->applyWarehouseFilters($q, $warehouseFilters));
+
+        if ($resolved['products']->isNotEmpty()) {
+            $query->whereIn('product_id', $resolved['products']->pluck('id'));
+        } else {
+            $query->whereRaw('0 = 1');
+        }
+
+        return $query
             ->orderBy('product_id')
             ->orderBy('warehouse_id')
-            ->limit($limit);
+            ->limit($limit)
+            ->get()
+            ->map(fn (Stock $stock) => $this->formatStockLevelRow($stock))
+            ->values()
+            ->all();
+    }
 
-        return $query->get()->map(function (Stock $stock) {
-            return [
-                'product' => $this->productSummary($stock->product),
-                'warehouse' => $this->warehouseSummary($stock->warehouse),
-                'slabs_on_hand' => (int) $stock->slabs_on_hand,
-                'has_stock_record' => true,
-            ];
-        })->values()->all();
+    /**
+     * Stock rows for explicit product and warehouse sets (existing stock records only).
+     *
+     * @param  Collection<int, Product>  $products
+     * @param  Collection<int, Warehouse>  $warehouses
+     * @return list<array<string, mixed>>
+     */
+    private function stockLevelRowsFor(Collection $products, Collection $warehouses): array
+    {
+        if ($products->isEmpty() || $warehouses->isEmpty()) {
+            return [];
+        }
+
+        $stockByPair = Stock::query()
+            ->with(['product', 'warehouse'])
+            ->whereIn('product_id', $products->pluck('id'))
+            ->whereIn('warehouse_id', $warehouses->pluck('id'))
+            ->get()
+            ->keyBy(fn (Stock $stock) => $stock->product_id.'-'.$stock->warehouse_id);
+
+        $rows = [];
+        foreach ($products as $product) {
+            foreach ($warehouses as $warehouse) {
+                $key = $product->id.'-'.$warehouse->id;
+                $stock = $stockByPair->get($key);
+
+                if ($stock !== null) {
+                    $rows[] = $this->formatStockLevelRow($stock);
+
+                    continue;
+                }
+
+                $rows[] = [
+                    'product' => $this->productSummary($product),
+                    'warehouse' => $this->warehouseSummary($warehouse),
+                    'slabs_on_hand' => 0,
+                    'has_stock_record' => false,
+                ];
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function formatStockLevelRow(Stock $stock): array
+    {
+        return [
+            'product' => $this->productSummary($stock->product),
+            'warehouse' => $this->warehouseSummary($stock->warehouse),
+            'slabs_on_hand' => (int) $stock->slabs_on_hand,
+            'has_stock_record' => true,
+        ];
     }
 
     /**
@@ -222,7 +316,16 @@ class StockLookupService
             $query->where('material', 'like', '%'.$filters['material'].'%');
         }
 
-        if (! empty($filters['color'])) {
+        if (! empty($filters['colors']) && is_array($filters['colors'])) {
+            $colors = array_values(array_filter($filters['colors'], static fn (mixed $c) => is_string($c) && trim($c) !== ''));
+            if ($colors !== []) {
+                $query->where(function (Builder $inner) use ($colors): void {
+                    foreach ($colors as $color) {
+                        $inner->orWhere('color', 'like', '%'.trim((string) $color).'%');
+                    }
+                });
+            }
+        } elseif (! empty($filters['color'])) {
             $query->where('color', 'like', '%'.$filters['color'].'%');
         }
 
@@ -267,4 +370,5 @@ class StockLookupService
             'has_stock_record' => $stock !== null,
         ];
     }
+
 }

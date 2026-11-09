@@ -4,7 +4,7 @@
     "scripts": {
         "build": "vite build",
         "dev": "vite",
-        "test": "node resources/js/chat/parsers.selfcheck.mjs"
+        "test": "node resources/js/chat/parsers.selfcheck.mjs && node resources/js/chat/assistantPolling.selfcheck.mjs && node resources/js/chat/assistantPollingRecovery.selfcheck.mjs"
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.0.0",

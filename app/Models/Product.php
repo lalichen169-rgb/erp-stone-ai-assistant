@@ -2,11 +2,23 @@
 
 namespace App\Models;
 
+use App\Support\ProductColorLexicon;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Product extends Model
 {
+    protected static function booted(): void
+    {
+        static::saved(static function (): void {
+            ProductColorLexicon::forgetCachedColors();
+        });
+
+        static::deleted(static function (): void {
+            ProductColorLexicon::forgetCachedColors();
+        });
+    }
+
     /**
      * @var list<string>
      */
@@ -43,5 +55,13 @@ class Product extends Model
     public function purchaseOrderLines(): HasMany
     {
         return $this->hasMany(PurchaseOrderLine::class);
+    }
+
+    /**
+     * @return HasMany<SupplierProduct, $this>
+     */
+    public function supplierProducts(): HasMany
+    {
+        return $this->hasMany(SupplierProduct::class);
     }
 }

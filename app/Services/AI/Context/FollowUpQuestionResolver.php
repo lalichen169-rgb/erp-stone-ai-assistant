@@ -8,11 +8,16 @@ use App\Models\Conversation;
 use App\Models\ConversationMessage;
 use App\Services\AI\AiAgentService;
 use App\Services\AI\Exceptions\AiProviderException;
+use App\Services\AI\Grounding\ErpQuestionStandaloneHeuristic;
 
 final class FollowUpQuestionResolver
 {
     public function __construct(
         private readonly AiAgentService $agentService,
+        private readonly ConversationThreadAnchorResolver $threadAnchorResolver,
+        private readonly DeterministicFollowUpResolver $deterministicFollowUpResolver,
+        private readonly ConversationTurnPairCollector $pairCollector,
+        private readonly ErpQuestionStandaloneHeuristic $standaloneHeuristic,
     ) {}
 
     public function resolve(string $newUserText, Conversation $conversation): ContextResolutionResult
@@ -28,6 +33,16 @@ final class FollowUpQuestionResolver
             );
         }
 
+        if ($this->standaloneHeuristic->isActionableStandalone($trimmed)) {
+            return new ContextResolutionResult(
+                wasAlreadyStandalone: true,
+                needsClarification: false,
+                resolvedStandaloneQuestion: $this->standaloneHeuristic->canonicalQuestion($trimmed) ?? $trimmed,
+                clarificationQuestion: null,
+                strategy: 'erp_actionable_standalone',
+            );
+        }
+
         if ($this->looksClearlyStandalone($trimmed)) {
             return new ContextResolutionResult(
                 wasAlreadyStandalone: true,
@@ -38,8 +53,8 @@ final class FollowUpQuestionResolver
             );
         }
 
-        $prev = $this->lastCompletedUserAssistantPair($conversation);
-        if ($prev === null) {
+        $pairs = $this->pairCollector->recentCompletedPairs($conversation, 8);
+        if ($pairs === []) {
             return new ContextResolutionResult(
                 wasAlreadyStandalone: true,
                 needsClarification: false,
@@ -49,13 +64,17 @@ final class FollowUpQuestionResolver
             );
         }
 
-        $previousUser = $prev['user'];
-        $previousAssistant = $prev['assistant'];
+        $anchor = $this->threadAnchorResolver->resolveAnchor($conversation, $trimmed);
+        $anchorQuestion = $anchor['question'] ?? $pairs[0]['question'];
+        $anchorAnswer = $anchor['answer'] ?? $pairs[0]['answer'];
+        $threadType = $anchor['type'] ?? null;
 
-        $baseQuestion = $previousUser->metadata['resolved_standalone_question'] ?? $previousUser->content;
-        $baseQuestion = is_string($baseQuestion) ? $baseQuestion : (string) $previousUser->content;
-
-        $deterministic = $this->tryDeterministic($trimmed, $baseQuestion, (string) $previousAssistant->content);
+        $deterministic = $this->deterministicFollowUpResolver->tryExpand(
+            $trimmed,
+            $anchorQuestion,
+            $anchorAnswer,
+            $threadType,
+        );
         if ($deterministic !== null) {
             return $deterministic;
         }
@@ -71,7 +90,7 @@ final class FollowUpQuestionResolver
         }
 
         try {
-            return $this->resolveWithAi($trimmed, $baseQuestion, (string) $previousAssistant->content);
+            return $this->resolveWithAi($trimmed, $anchorQuestion, $anchorAnswer);
         } catch (AiProviderException|\Throwable) {
             return new ContextResolutionResult(
                 wasAlreadyStandalone: false,
@@ -97,92 +116,6 @@ final class FollowUpQuestionResolver
         }
 
         return false;
-    }
-
-    /**
-     * @return array{user: ConversationMessage, assistant: ConversationMessage}|null
-     */
-    private function lastCompletedUserAssistantPair(Conversation $conversation): ?array
-    {
-        $users = ConversationMessage::query()
-            ->where('conversation_id', $conversation->id)
-            ->where('is_internal', false)
-            ->where('role', \App\Enums\ConversationMessageRole::User)
-            ->orderByDesc('sequence')
-            ->limit(5)
-            ->get();
-
-        foreach ($users as $lastUser) {
-            $assistant = ConversationMessage::query()
-                ->where('conversation_id', $conversation->id)
-                ->where('is_internal', false)
-                ->where('role', \App\Enums\ConversationMessageRole::Assistant)
-                ->where('sequence', '>', $lastUser->sequence)
-                ->orderBy('sequence')
-                ->first();
-
-            if ($assistant !== null) {
-                return ['user' => $lastUser, 'assistant' => $assistant];
-            }
-        }
-
-        return null;
-    }
-
-    private function tryDeterministic(string $followUp, string $previousQuestion, string $previousAnswer): ?ContextResolutionResult
-    {
-        // "And in Dallas?" / "in Dallas?"
-        if (preg_match('/^(and\s+)?in\s+(?P<city>[A-Za-z][A-Za-z\s\-]+)\??$/i', $followUp, $m) === 1) {
-            $city = trim($m['city']);
-            if ($city !== '' && preg_match('/Houston|Dallas|Austin/i', $previousQuestion) === 1) {
-                $resolved = preg_replace('/Houston|Dallas|Austin/i', $city, $previousQuestion, 1);
-
-                return new ContextResolutionResult(
-                    wasAlreadyStandalone: false,
-                    needsClarification: false,
-                    resolvedStandaloneQuestion: $resolved,
-                    clarificationQuestion: null,
-                    strategy: 'deterministic_city_swap',
-                );
-            }
-        }
-
-        // "What about 2cm?" thickness
-        if (preg_match('/^(what\s+about|and\s+for)\s+(?P<th>\d+(\.\d+)?)\s*cm\??$/i', $followUp, $m) === 1) {
-            $th = $m['th'];
-            $resolved = preg_replace('/\b\d+(\.\d+)?\s*cm\b/i', $th.' cm', $previousQuestion, 1);
-
-            return new ContextResolutionResult(
-                wasAlreadyStandalone: false,
-                needsClarification: false,
-                resolvedStandaloneQuestion: $resolved,
-                clarificationQuestion: null,
-                strategy: 'deterministic_thickness',
-            );
-        }
-
-        // "What about Supplier X?"
-        if (preg_match('/^(what|how)\s+about\s+(?P<supplier>.+)\??$/i', $followUp, $m) === 1) {
-            $supplier = trim($m['supplier']);
-            if ($supplier !== '' && preg_match('/supplier/i', $previousQuestion) === 1) {
-                $resolved = preg_replace(
-                    '/Supplier\s+[A-Za-z0-9\s\-]+/i',
-                    'Supplier '.$supplier,
-                    $previousQuestion,
-                    1,
-                );
-
-                return new ContextResolutionResult(
-                    wasAlreadyStandalone: false,
-                    needsClarification: false,
-                    resolvedStandaloneQuestion: $resolved,
-                    clarificationQuestion: null,
-                    strategy: 'deterministic_supplier_swap',
-                );
-            }
-        }
-
-        return null;
     }
 
     private function resolveWithAi(string $followUp, string $previousQuestion, string $previousAnswer): ContextResolutionResult

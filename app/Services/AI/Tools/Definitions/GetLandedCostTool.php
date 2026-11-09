@@ -4,6 +4,7 @@ namespace App\Services\AI\Tools\Definitions;
 
 use App\DTOs\AI\AiToolDefinition;
 use App\Models\User;
+use App\Services\AI\Tools\Concerns\LegacyExecutionMatchesEnhanced;
 use App\Services\AI\Tools\Concerns\ValidatesToolArguments;
 use App\Services\AI\Tools\Contracts\AiToolInterface;
 use App\Services\AI\Tools\ToolExecutionContext;
@@ -13,6 +14,7 @@ use App\Services\Erp\LandedCostService;
 
 final class GetLandedCostTool implements AiToolInterface
 {
+    use LegacyExecutionMatchesEnhanced;
     use ValidatesToolArguments;
 
     public function __construct(private readonly LandedCostService $landedCostService) {}
@@ -20,6 +22,11 @@ final class GetLandedCostTool implements AiToolInterface
     public function name(): string
     {
         return 'getLandedCost';
+    }
+
+    public function legacyDefinition(): AiToolDefinition
+    {
+        return $this->definition();
     }
 
     public function definition(): AiToolDefinition

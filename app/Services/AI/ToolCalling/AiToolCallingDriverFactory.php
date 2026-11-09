@@ -20,6 +20,7 @@ final class AiToolCallingDriverFactory
         return match ($provider) {
             'openai' => $this->app->make(OpenAiToolCallingDriver::class),
             'claude' => $this->app->make(ClaudeToolCallingDriver::class),
+            'ollama' => $this->app->make(OllamaToolCallingDriver::class),
             default => throw new AiProviderException(
                 "AI provider [{$provider}] does not support the tool-calling orchestration driver.",
                 AiProviderException::CODE_UNSUPPORTED_PROVIDER,

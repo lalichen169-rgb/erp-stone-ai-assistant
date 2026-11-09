@@ -126,11 +126,13 @@ final class OpenAiProvider implements AiProviderInterface
                 continue;
             }
 
+            $isAssistant = $message->role === AiMessage::ROLE_ASSISTANT;
+
             $input[] = [
-                'role' => $message->role === AiMessage::ROLE_ASSISTANT ? 'assistant' : 'user',
+                'role' => $isAssistant ? 'assistant' : 'user',
                 'content' => [
                     [
-                        'type' => 'input_text',
+                        'type' => $isAssistant ? 'output_text' : 'input_text',
                         'text' => $message->content,
                     ],
                 ],
@@ -161,8 +163,9 @@ final class OpenAiProvider implements AiProviderInterface
             $parameters['tool_choice'] = $this->normalizeOpenAiToolChoice($request->toolChoice);
         }
 
-        if ($request->metadata !== []) {
-            $parameters['metadata'] = $request->metadata;
+        $providerMetadata = $this->openAiMetadataPayload($request->metadata);
+        if ($providerMetadata !== []) {
+            $parameters['metadata'] = $providerMetadata;
         }
 
         return $parameters;
@@ -174,11 +177,30 @@ final class OpenAiProvider implements AiProviderInterface
      */
     private function normalizeOpenAiToolChoice(string|array $toolChoice): string|array
     {
-        if (is_array($toolChoice)) {
-            return 'auto';
+        return $toolChoice;
+    }
+
+    /**
+     * OpenAI Responses metadata values must be strings (max 512 chars per key).
+     *
+     * @param  array<string, mixed>  $metadata
+     * @return array<string, string>
+     */
+    private function openAiMetadataPayload(array $metadata): array
+    {
+        $out = [];
+
+        foreach ($metadata as $key => $value) {
+            if (! is_string($key) || $key === '' || str_starts_with($key, '_')) {
+                continue;
+            }
+
+            if (is_string($value) && $value !== '') {
+                $out[$key] = mb_substr($value, 0, 512);
+            }
         }
 
-        return $toolChoice;
+        return $out;
     }
 
     /**

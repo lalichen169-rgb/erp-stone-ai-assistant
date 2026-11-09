@@ -188,8 +188,43 @@ class ConversationPhase7Test extends TestCase
         $this->assertTrue($found, 'Purchasing viewers should receive getLandedCost tool payloads in context.');
     }
 
+    public function test_context_manager_enriches_tool_rows_with_name_and_arguments_from_trace(): void
+    {
+        $user = $this->createSalesApiUser();
+        $svc = app(ConversationService::class);
+        $conv = $svc->createForUser($user);
+
+        $userMsg = $svc->appendUserMessage($user, $conv, 'Stock?');
+        $recorder = new \App\Services\AI\Conversations\ConversationTurnRecorder($conv, $userMsg);
+        $recorder->add(
+            new \App\DTOs\AI\AiToolCall('trace_99', 'checkStock', ['warehouse_name' => 'Houston', 'color' => 'Calacatta']),
+            new \App\Services\AI\Tools\ToolExecutionResult(success: true, data: ['slabs_on_hand' => 42]),
+        );
+        $svc->persistToolTraces($user, $recorder);
+
+        Config::set('ai.provider', 'ollama');
+        $messages = app(\App\Services\AI\Context\ConversationContextManager::class)->buildAiMessages(
+            $conv->fresh(),
+            $user,
+            aiProvider: 'ollama',
+        );
+        $tool = null;
+        foreach ($messages as $m) {
+            if ($m->role === \App\DTOs\AI\AiMessage::ROLE_TOOL) {
+                $tool = $m;
+                break;
+            }
+        }
+
+        $this->assertNotNull($tool);
+        $this->assertSame('checkStock', $tool->toolName);
+        $this->assertSame('trace_99', $tool->toolCallId);
+        $this->assertSame('Houston', $tool->toolCallArguments['warehouse_name'] ?? null);
+    }
+
     public function test_follow_up_deterministic_city_swap(): void
     {
+        $this->createHoustonDallasAustinWarehouses();
         $user = $this->createSalesApiUser();
         $svc = app(ConversationService::class);
         $conv = $svc->createForUser($user);
@@ -209,6 +244,91 @@ class ConversationPhase7Test extends TestCase
         $this->assertStringContainsString('Calacatta', $result->resolvedStandaloneQuestion ?? '');
     }
 
+    public function test_follow_up_in_dallas_resolves_carrara_stock_question(): void
+    {
+        $this->createHoustonDallasAustinWarehouses();
+        $user = $this->createSalesApiUser();
+        $svc = app(ConversationService::class);
+        $conv = $svc->createForUser($user);
+
+        $svc->appendUserMessage(
+            $user,
+            $conv,
+            'How many 3cm Carrara slabs do we have in Houston?',
+        );
+        $svc->appendAssistantMessage($user, $conv, '14 slabs in Houston.');
+
+        $result = app(FollowUpQuestionResolver::class)->resolve('in dallas', $conv->fresh());
+
+        $this->assertFalse($result->needsClarification);
+        $this->assertStringContainsString('Dallas', $result->resolvedStandaloneQuestion ?? '');
+        $this->assertStringContainsString('Carrara', $result->resolvedStandaloneQuestion ?? '');
+    }
+
+    public function test_follow_up_and_in_austin_resolves_stock_question(): void
+    {
+        $this->createHoustonDallasAustinWarehouses();
+        $user = $this->createSalesApiUser();
+        $svc = app(ConversationService::class);
+        $conv = $svc->createForUser($user);
+
+        $svc->appendUserMessage(
+            $user,
+            $conv,
+            'How many 3cm Calacatta slabs are in Houston?',
+        );
+        $svc->appendAssistantMessage($user, $conv, 'You have 42 slabs in Houston.');
+
+        $result = app(FollowUpQuestionResolver::class)->resolve('And in Austin?', $conv->fresh());
+
+        $this->assertFalse($result->needsClarification);
+        $this->assertStringContainsString('Austin', $result->resolvedStandaloneQuestion ?? '');
+        $this->assertStringContainsString('Calacatta', $result->resolvedStandaloneQuestion ?? '');
+    }
+
+    public function test_follow_up_for_supplier_after_bank_details_answer(): void
+    {
+        $user = $this->createPurchasingApiUser();
+        $svc = app(ConversationService::class);
+        $conv = $svc->createForUser($user);
+
+        $svc->appendUserMessage(
+            $user,
+            $conv,
+            'Supplier bank details for Gulf Stone Imports',
+        );
+        $svc->appendAssistantMessage(
+            $user,
+            $conv,
+            "Banking details for Demo Supplier — Gulf Stone Imports (payment terms: Net 30):\nDemo Bank — Account DEMO-GSI-001",
+        );
+
+        $result = app(FollowUpQuestionResolver::class)->resolve('for Hill Country Quartz Co', $conv->fresh());
+
+        $this->assertFalse($result->needsClarification);
+        $this->assertSame(
+            'deterministic_bank_supplier_follow_up',
+            $result->strategy,
+        );
+        $this->assertStringContainsString('Hill Country Quartz Co', $result->resolvedStandaloneQuestion ?? '');
+        $this->assertStringContainsStringIgnoringCase('bank details', $result->resolvedStandaloneQuestion ?? '');
+    }
+
+    public function test_follow_up_supplier_name_only_after_bank_details_answer(): void
+    {
+        $user = $this->createPurchasingApiUser();
+        $svc = app(ConversationService::class);
+        $conv = $svc->createForUser($user);
+
+        $svc->appendUserMessage($user, $conv, 'What are the bank details for Gulf Stone Imports?');
+        $svc->appendAssistantMessage($user, $conv, 'Banking details for Demo Supplier — Gulf Stone Imports:');
+
+        $result = app(FollowUpQuestionResolver::class)->resolve('Hill Country Quartz Co', $conv->fresh());
+
+        $this->assertFalse($result->needsClarification);
+        $this->assertStringContainsString('Hill Country Quartz Co', $result->resolvedStandaloneQuestion ?? '');
+    }
+
     public function test_follow_up_deterministic_thickness(): void
     {
         $user = $this->createSalesApiUser();
@@ -222,6 +342,22 @@ class ConversationPhase7Test extends TestCase
 
         $this->assertFalse($result->needsClarification);
         $this->assertStringContainsString('2 cm', $result->resolvedStandaloneQuestion ?? '');
+    }
+
+    public function test_follow_up_landed_cost_po_number_only(): void
+    {
+        $user = $this->createPurchasingApiUser();
+        $svc = app(ConversationService::class);
+        $conv = $svc->createForUser($user);
+
+        $svc->appendUserMessage($user, $conv, 'What is the landed cost for purchase order 503?');
+        $svc->appendAssistantMessage($user, $conv, 'Landed cost for PO 503 (supplier example).');
+
+        $result = app(FollowUpQuestionResolver::class)->resolve('510', $conv->fresh());
+
+        $this->assertFalse($result->needsClarification);
+        $this->assertStringContainsString('510', $result->resolvedStandaloneQuestion ?? '');
+        $this->assertStringContainsStringIgnoringCase('landed cost', $result->resolvedStandaloneQuestion ?? '');
     }
 
     public function test_follow_up_overdue_supplier_swap(): void
@@ -320,13 +456,14 @@ class ConversationPhase7Test extends TestCase
         $scenario = $this->seedCalacattaStockScenario();
         $product = $scenario['product'];
         $supplier = $this->createSupplierWithName('Conv Proposal Supplier');
+        $warehouseId = $scenario['warehouses']['houston']->id;
 
         $args = json_encode([
             'supplier_id' => $supplier->id,
             'order_date' => '2026-11-06',
             'freight_cost' => '10.00',
             'lines' => [
-                ['product_id' => $product->id, 'quantity' => 1, 'unit_cost' => '20.00'],
+                ['product_id' => $product->id, 'warehouse_id' => $warehouseId, 'quantity' => 1, 'unit_cost' => '20.00'],
             ],
         ], JSON_THROW_ON_ERROR);
 

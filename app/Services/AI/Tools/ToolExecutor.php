@@ -4,7 +4,7 @@ namespace App\Services\AI\Tools;
 
 use App\DTOs\AI\AiToolCall;
 use App\DTOs\AI\AiToolDefinition;
-use App\Services\AI\Tools\Contracts\AiToolInterface;
+use App\Services\AI\AiProviderProfile;
 use Illuminate\Auth\Access\AuthorizationException;
 use Throwable;
 
@@ -34,8 +34,11 @@ final class ToolExecutor
 
     public function __construct(private readonly ToolRegistry $registry) {}
 
-    public function execute(ToolExecutionContext $context, AiToolCall $call): ToolExecutionResult
+    public function execute(ToolExecutionContext $context, AiToolCall $call, ?string $provider = null): ToolExecutionResult
     {
+        $provider = AiProviderProfile::normalize($provider);
+        $legacyPresentation = AiProviderProfile::usesLegacyOpenAiClaudePresentation($provider);
+
         $normalized = $this->normalizeArguments($call);
 
         if ($normalized instanceof ToolExecutionResult) {
@@ -62,21 +65,32 @@ final class ToolExecutor
             );
         }
 
-        if (! $tool->allowedFor($context->user)) {
+        if (! $this->registry->isExecutableForProvider($call->name, $context->user, $provider)) {
+            if (! $tool->allowedFor($context->user)) {
+                return new ToolExecutionResult(
+                    success: false,
+                    errorCode: 'permission_denied',
+                    errorMessage: 'You are not allowed to use this tool.',
+                );
+            }
+
             return new ToolExecutionResult(
                 success: false,
-                errorCode: 'permission_denied',
-                errorMessage: 'You are not allowed to use this tool.',
+                errorCode: 'unknown_tool',
+                errorMessage: 'Unknown tool name.',
             );
         }
 
-        $schemaKeys = $this->validateArgumentsAgainstToolSchema($stripped, $tool->definition());
-        if ($schemaKeys instanceof ToolExecutionResult) {
-            return $schemaKeys;
+        $schemaDefinition = $legacyPresentation ? $tool->legacyDefinition() : $tool->definition();
+        $schemaFiltered = $this->filterArgumentsAgainstToolSchema($stripped, $schemaDefinition);
+        if ($schemaFiltered instanceof ToolExecutionResult) {
+            return $schemaFiltered;
         }
 
         try {
-            return $tool->execute($context, $stripped);
+            return $legacyPresentation
+                ? $tool->executeLegacy($context, $schemaFiltered)
+                : $tool->execute($context, $schemaFiltered);
         } catch (AuthorizationException) {
             return new ToolExecutionResult(
                 success: false,
@@ -133,38 +147,38 @@ final class ToolExecutor
      *
      * @param  array<string, mixed>  $arguments
      */
-    private function validateArgumentsAgainstToolSchema(array $arguments, AiToolDefinition $definition): ?ToolExecutionResult
+    /**
+     * @param  array<string, mixed>  $arguments
+     * @return array<string, mixed>|ToolExecutionResult
+     */
+    private function filterArgumentsAgainstToolSchema(array $arguments, AiToolDefinition $definition): array|ToolExecutionResult
     {
         $schema = $definition->parameters;
 
         if (! is_array($schema) || ($schema['type'] ?? null) !== 'object') {
-            return null;
+            return $arguments;
         }
 
         $additional = $schema['additionalProperties'] ?? null;
 
         // Open object: provider compatibility — do not reject unknown keys here.
         if ($additional === true) {
-            return null;
+            return $arguments;
         }
 
         $properties = $schema['properties'] ?? [];
         if (! is_array($properties) || $properties === []) {
-            return null;
+            return $arguments;
         }
 
         $allowed = array_keys($properties);
 
         foreach (array_keys($arguments) as $key) {
             if (! in_array($key, $allowed, true)) {
-                return new ToolExecutionResult(
-                    success: false,
-                    errorCode: 'validation_error',
-                    errorMessage: 'Tool arguments contained unknown or disallowed keys.',
-                );
+                unset($arguments[$key]);
             }
         }
 
-        return null;
+        return $arguments;
     }
 }

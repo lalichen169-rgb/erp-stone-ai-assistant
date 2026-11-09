@@ -32,6 +32,7 @@ yarn-error.log
 /tools/php/**
 !/tools/php/INSTALL-SOURCE.txt
 !/tools/php/README.md
+!/tools/php/stoneerp-overrides.ini
 !/tools/php/readme-redist-bins.txt
 
 # Default Laravel log output (directory may be recreated)
@@ -82,3 +83,7 @@ Desktop.ini
 /tools/memurai/Memurai-For-Redis-EULA.rtf
 /tools/memurai/Open-Source-Licenses.txt
 /tools/memurai/Release-Notes.txt
+
+# Python bytecode cache (documentation generators under tools/)
+**/__pycache__/
+*.py[cod]

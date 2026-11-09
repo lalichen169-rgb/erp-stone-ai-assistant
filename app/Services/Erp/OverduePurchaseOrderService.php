@@ -20,18 +20,28 @@ class OverduePurchaseOrderService
      *
      * @return list<array<string, mixed>>
      */
-    public function listOverdue(User $user, ?CarbonInterface $today = null, int $limit = self::DEFAULT_LIMIT): array
-    {
+    public function listOverdue(
+        User $user,
+        ?CarbonInterface $today = null,
+        int $limit = self::DEFAULT_LIMIT,
+        ?int $supplierId = null,
+    ): array {
         $this->authorizePurchaseOrderStatus($user);
 
         $referenceDate = Carbon::instance($today ?? Carbon::today())->startOfDay();
         $limit = max(1, min($limit, 500));
 
-        return PurchaseOrder::query()
+        $query = PurchaseOrder::query()
             ->with('supplier:id,name')
             ->where('status', PurchaseOrderStatus::Ordered)
             ->whereNotNull('eta')
-            ->whereDate('eta', '<', $referenceDate)
+            ->whereDate('eta', '<', $referenceDate);
+
+        if ($supplierId !== null && $supplierId > 0) {
+            $query->where('supplier_id', $supplierId);
+        }
+
+        return $query
             ->orderBy('eta')
             ->orderBy('id')
             ->limit($limit)

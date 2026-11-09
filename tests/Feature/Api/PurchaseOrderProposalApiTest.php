@@ -36,11 +36,7 @@ class PurchaseOrderProposalApiTest extends TestCase
             'eta' => '2026-12-15',
             'freight_cost' => '125.50',
             'lines' => [
-                [
-                    'product_id' => $product->id,
-                    'quantity' => 4,
-                    'unit_cost' => '210.00',
-                ],
+                $this->proposalLine($product),
             ],
         ];
     }
@@ -136,7 +132,7 @@ class PurchaseOrderProposalApiTest extends TestCase
             ->assertJsonValidationErrors(['supplier_id']);
 
         $badLines = $base;
-        $badLines['lines'] = [['product_id' => 99999, 'quantity' => 1, 'unit_cost' => '1.00']];
+        $badLines['lines'] = [array_replace($this->proposalLine($product, 1, '1.00'), ['product_id' => 99999])];
 
         $this->withHeader('Idempotency-Key', 'idem-bad-product')
             ->postJson('/api/purchase-order-proposals', $badLines)
@@ -150,24 +146,20 @@ class PurchaseOrderProposalApiTest extends TestCase
 
         $this->withHeader('Idempotency-Key', 'idem-bad-qty')
             ->postJson('/api/purchase-order-proposals', array_replace($base, [
-                'lines' => [['product_id' => $product->id, 'quantity' => 0, 'unit_cost' => '1.00']],
+                'lines' => [$this->proposalLine($product, 0, '1.00')],
             ]))
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['lines.0.quantity']);
 
         $this->withHeader('Idempotency-Key', 'idem-bad-cost')
             ->postJson('/api/purchase-order-proposals', array_replace($base, [
-                'lines' => [['product_id' => $product->id, 'quantity' => 1, 'unit_cost' => '-1.00']],
+                'lines' => [$this->proposalLine($product, 1, '-1.00')],
             ]))
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['lines.0.unit_cost']);
 
         $tooManyLines = $base;
-        $tooManyLines['lines'] = array_fill(0, 51, [
-            'product_id' => $product->id,
-            'quantity' => 1,
-            'unit_cost' => '1.00',
-        ]);
+        $tooManyLines['lines'] = array_fill(0, 51, $this->proposalLine($product, 1, '1.00'));
 
         $this->withHeader('Idempotency-Key', 'idem-too-many')
             ->postJson('/api/purchase-order-proposals', $tooManyLines)

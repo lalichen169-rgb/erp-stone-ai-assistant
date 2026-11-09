@@ -5,6 +5,7 @@ namespace App\Services\AI;
 use App\Contracts\AiProviderInterface;
 use App\Services\AI\Exceptions\AiProviderException;
 use App\Services\AI\Providers\ClaudeProvider;
+use App\Services\AI\Providers\OllamaProvider;
 use App\Services\AI\Providers\OpenAiProvider;
 use Illuminate\Contracts\Foundation\Application;
 
@@ -19,6 +20,7 @@ class AiProviderFactory
         return match ($provider) {
             'openai' => $this->app->make(OpenAiProvider::class),
             'claude', 'anthropic' => $this->app->make(ClaudeProvider::class),
+            'ollama' => $this->app->make(OllamaProvider::class),
             'bedrock', 'gemini', 'groq' => throw new AiProviderException(
                 "AI provider [{$provider}] is not implemented yet.",
                 AiProviderException::CODE_UNSUPPORTED_PROVIDER

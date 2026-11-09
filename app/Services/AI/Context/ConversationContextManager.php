@@ -6,7 +6,9 @@ use App\DTOs\AI\AiMessage;
 use App\Enums\ConversationMessageRole;
 use App\Models\Conversation;
 use App\Models\ConversationMessage;
+use App\Models\ConversationToolCall;
 use App\Models\User;
+use App\Services\AI\AiProviderProfile;
 
 final class ConversationContextManager
 {
@@ -22,6 +24,7 @@ final class ConversationContextManager
         Conversation $conversation,
         User $viewer,
         array $excludeMessageIds = [],
+        ?string $aiProvider = null,
     ): array {
         $summary = $conversation->latestSummary;
         $max = (int) config('ai.conversation.context.max_messages', 24);
@@ -46,7 +49,7 @@ final class ConversationContextManager
                 continue;
             }
 
-            $msg = $this->mapMessage($row);
+            $msg = $this->mapMessage($row, $aiProvider);
             if ($msg === null) {
                 continue;
             }
@@ -76,12 +79,12 @@ final class ConversationContextManager
         return $messages;
     }
 
-    public function buildContext(Conversation $conversation, User $viewer): ConversationContext
+    public function buildContext(Conversation $conversation, User $viewer, ?string $aiProvider = null): ConversationContext
     {
         $summary = $conversation->latestSummary;
 
         return new ConversationContext(
-            aiMessages: $this->buildAiMessages($conversation, $viewer),
+            aiMessages: $this->buildAiMessages($conversation, $viewer, aiProvider: $aiProvider),
             latestSummaryText: $summary?->content,
             metadata: [
                 'message_count_used' => ConversationMessage::query()
@@ -104,14 +107,14 @@ final class ConversationContextManager
         }
 
         // Sales must not see prior landed-cost tool payloads in context (defense in depth vs ToolResultRedactor).
-        if ($name === 'getLandedCost') {
+        if ($name === 'getLandedCost' || $name === 'getSupplierBankDetails') {
             return false;
         }
 
         return true;
     }
 
-    private function mapMessage(ConversationMessage $row): ?AiMessage
+    private function mapMessage(ConversationMessage $row, ?string $aiProvider = null): ?AiMessage
     {
         if ($row->role === ConversationMessageRole::System) {
             return AiMessage::system((string) $row->content);
@@ -139,7 +142,34 @@ final class ConversationContextManager
                 $payload = ['raw' => (string) $row->content];
             }
 
-            return AiMessage::toolResult(is_string($toolCallId) ? $toolCallId : 'unknown', $payload);
+            if (! AiProviderProfile::isOllama($aiProvider)) {
+                return AiMessage::toolResult(
+                    is_string($toolCallId) && trim($toolCallId) !== '' ? $toolCallId : 'unknown',
+                    $payload,
+                );
+            }
+
+            if (! is_string($toolCallId) || trim($toolCallId) === '') {
+                $toolCallId = 'unknown';
+            }
+
+            $metadataName = $row->metadata['tool_name'] ?? null;
+            $toolName = is_string($metadataName) && trim($metadataName) !== '' ? trim($metadataName) : null;
+
+            $trace = ConversationToolCall::query()
+                ->where('tool_result_message_id', $row->id)
+                ->first();
+
+            if ($toolName === null && $trace !== null) {
+                $toolName = $trace->tool_name;
+            }
+
+            $arguments = $trace?->arguments;
+            if (! is_array($arguments)) {
+                $arguments = null;
+            }
+
+            return AiMessage::toolResult($toolCallId, $payload, $toolName, $arguments);
         }
 
         return null;

@@ -3,9 +3,11 @@
 namespace Tests;
 
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
+use Tests\Support\UsesErpDatabaseTransactions;
 
 abstract class TestCase extends BaseTestCase
 {
+    use UsesErpDatabaseTransactions;
     protected function setUp(): void
     {
         parent::setUp();

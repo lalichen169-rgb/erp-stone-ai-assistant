@@ -36,7 +36,17 @@ services:
   queue:
     build: *app-build
     image: stoneerp-ai:local
-    command: ["php", "artisan", "queue:work", "redis", "--sleep=3", "--tries=3", "--max-time=3600"]
+    # Queue name and job timeout follow ai.assistant.async.* (AI_ASSISTANT_QUEUE, AI_ASSISTANT_JOB_TIMEOUT).
+    command:
+      - sh
+      - -c
+      - >-
+        exec php -d max_execution_time=0 artisan queue:work
+        $${AI_ASSISTANT_QUEUE_CONNECTION:-redis}
+        --queue=$${AI_ASSISTANT_QUEUE:-default}
+        --sleep=3 --tries=1
+        --timeout=$${AI_ASSISTANT_JOB_TIMEOUT:-900}
+        --max-time=3600
     env_file:
       - docker/compose.env
     depends_on:

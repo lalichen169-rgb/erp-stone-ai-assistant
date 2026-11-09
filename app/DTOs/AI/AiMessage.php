@@ -16,6 +16,7 @@ final readonly class AiMessage
 
     /**
      * @param  array<string, mixed>|null  $toolPayload  Structured tool result for serialization
+     * @param  array<string, mixed>|null  $toolCallArguments  Arguments from the original model tool call (conversation history)
      * @param  list<array<string, mixed>>|null  $claudeAssistantBlocks  Assistant message content blocks (tool_use + text)
      */
     public function __construct(
@@ -24,6 +25,7 @@ final readonly class AiMessage
         public ?string $toolCallId = null,
         public ?string $toolName = null,
         public ?array $toolPayload = null,
+        public ?array $toolCallArguments = null,
         public ?array $claudeAssistantBlocks = null,
     ) {
         if (trim($this->role) === '') {
@@ -58,15 +60,25 @@ final readonly class AiMessage
     /**
      * @param  array<string, mixed>  $payload
      */
-    public static function toolResult(string $toolCallId, array $payload): self
-    {
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>|null  $toolCallArguments
+     */
+    public static function toolResult(
+        string $toolCallId,
+        array $payload,
+        ?string $toolName = null,
+        ?array $toolCallArguments = null,
+    ): self {
         $json = json_encode($payload, JSON_THROW_ON_ERROR);
 
         return new self(
             role: self::ROLE_TOOL,
             content: $json,
             toolCallId: $toolCallId,
+            toolName: $toolName,
             toolPayload: $payload,
+            toolCallArguments: $toolCallArguments,
         );
     }
 

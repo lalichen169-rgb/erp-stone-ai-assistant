@@ -19,6 +19,7 @@ class PurchaseOrderSearchRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'purchase_order_id' => ['sometimes', 'integer', 'min:1'],
             'supplier_id' => ['sometimes', 'integer', 'min:1'],
             'supplier_name' => ['sometimes', 'string', 'max:255'],
             'status' => ['sometimes', 'string', Rule::in(PurchaseOrderStatus::values())],
@@ -40,6 +41,7 @@ class PurchaseOrderSearchRequest extends FormRequest
     {
         return array_filter(
             $this->only([
+                'purchase_order_id',
                 'supplier_id',
                 'supplier_name',
                 'status',

@@ -82,7 +82,7 @@ class ErpServiceSecurityAuditTest extends TestCase
                 'eta' => null,
                 'freight_cost' => '10.00',
                 'lines' => [
-                    ['product_id' => $product->id, 'quantity' => 2, 'unit_cost' => '100.00'],
+                    $this->proposalLine($product, 2, '100.00'),
                 ],
             ]
         );
@@ -121,7 +121,7 @@ class ErpServiceSecurityAuditTest extends TestCase
                 'order_date' => '2026-11-06',
                 'freight_cost' => '0.00',
                 'lines' => [
-                    ['product_id' => $product->id, 'quantity' => 1, 'unit_cost' => '10.00'],
+                    $this->proposalLine($product, 1, '10.00'),
                 ],
             ]
         );
@@ -160,7 +160,7 @@ class ErpServiceSecurityAuditTest extends TestCase
                 'order_date' => '2026-11-06',
                 'freight_cost' => '0.00',
                 'lines' => [
-                    ['product_id' => $product->id, 'quantity' => 1, 'unit_cost' => '10.00'],
+                    $this->proposalLine($product, 1, '10.00'),
                 ],
             ]
         );

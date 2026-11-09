@@ -5,6 +5,8 @@ namespace App\Services\AI\Tools\Definitions;
 use App\DTOs\AI\AiToolDefinition;
 use App\Enums\PurchaseOrderStatus;
 use App\Models\User;
+use App\Services\AI\Tools\Concerns\LegacyExecutionMatchesEnhanced;
+use App\Services\AI\Tools\Concerns\UsesCompactToolDescriptions;
 use App\Services\AI\Tools\Concerns\ValidatesToolArguments;
 use App\Services\AI\Tools\Contracts\AiToolInterface;
 use App\Services\AI\Tools\ToolExecutionContext;
@@ -14,6 +16,8 @@ use Illuminate\Validation\Rule;
 
 final class SearchPurchaseOrdersTool implements AiToolInterface
 {
+    use LegacyExecutionMatchesEnhanced;
+    use UsesCompactToolDescriptions;
     use ValidatesToolArguments;
 
     public function __construct(private readonly PurchaseOrderLookupService $purchaseOrderLookupService) {}
@@ -23,15 +27,54 @@ final class SearchPurchaseOrdersTool implements AiToolInterface
         return 'searchPurchaseOrders';
     }
 
-    public function definition(): AiToolDefinition
+    public function legacyDefinition(): AiToolDefinition
     {
         return new AiToolDefinition(
             name: $this->name(),
-            description: 'Search purchase orders by status, supplier name, and order date range. Returns status and line quantities without unit costs, freight, or bank details for authorized roles.',
+            description: 'Search purchase orders by numeric purchase_order_id, status, supplier name, and order date range. Use purchase_order_id only when the user refers to a specific PO number. Returns status and line quantities without unit costs, freight, or bank details for authorized roles.',
             parameters: [
                 'type' => 'object',
                 'additionalProperties' => false,
                 'properties' => [
+                    'purchase_order_id' => [
+                        'type' => 'integer',
+                        'minimum' => 1,
+                        'description' => 'Exact ERP purchase order id when the user asks about a specific PO number.',
+                    ],
+                    'status' => [
+                        'type' => 'string',
+                        'enum' => ['draft', 'ordered', 'received', 'cancelled'],
+                    ],
+                    'supplier_name' => ['type' => 'string', 'max' => 255],
+                    'date_from' => ['type' => 'string', 'description' => 'Order date from (Y-m-d)'],
+                    'date_to' => ['type' => 'string', 'description' => 'Order date to (Y-m-d)'],
+                    'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 200],
+                    'page' => ['type' => 'integer', 'minimum' => 1],
+                ],
+            ],
+        );
+    }
+
+    public function definition(): AiToolDefinition
+    {
+        $description = $this->useCompactToolDescriptions()
+            ? 'Search POs by id, status, supplier, dates. Use purchase_order_id only for a specific PO reference. No unit costs or bank details.'
+            : 'Search purchase orders by purchase_order_id, status, supplier name, and optional order date range. '
+                .'Status alone is valid (e.g. status=draft) — do not require dates or supplier unless the user asks to narrow. '
+                .'Sales and Purchasing may use this tool. Returns status and line quantities without unit costs or bank details.';
+
+        return new AiToolDefinition(
+            name: $this->name(),
+            description: $description,
+            parameters: [
+                'type' => 'object',
+                'additionalProperties' => false,
+                'properties' => [
+                    'purchase_order_id' => [
+                        'type' => 'integer',
+                        'minimum' => 1,
+                        'description' => 'Exact ERP purchase order id when the user asks about a specific PO number.',
+                    ],
                     'status' => [
                         'type' => 'string',
                         'enum' => ['draft', 'ordered', 'received', 'cancelled'],
@@ -54,6 +97,7 @@ final class SearchPurchaseOrdersTool implements AiToolInterface
     public function execute(ToolExecutionContext $context, array $arguments): ToolExecutionResult
     {
         $validated = $this->validateOrError($arguments, [
+            'purchase_order_id' => ['sometimes', 'integer', 'min:1'],
             'status' => ['sometimes', 'string', Rule::in(PurchaseOrderStatus::values())],
             'supplier_name' => ['sometimes', 'string', 'max:255'],
             'date_from' => ['sometimes', 'date'],
@@ -67,6 +111,10 @@ final class SearchPurchaseOrdersTool implements AiToolInterface
         }
 
         $filters = [];
+
+        if (isset($validated['purchase_order_id'])) {
+            $filters['purchase_order_id'] = (int) $validated['purchase_order_id'];
+        }
 
         if (isset($validated['status'])) {
             $filters['status'] = $validated['status'];
@@ -88,6 +136,14 @@ final class SearchPurchaseOrdersTool implements AiToolInterface
         $page = (int) ($validated['page'] ?? 1);
 
         $result = $this->purchaseOrderLookupService->search($context->user, $filters, $limit, $page);
+
+        if (isset($validated['purchase_order_id']) && (int) ($result['meta']['total'] ?? 0) === 0) {
+            return new ToolExecutionResult(
+                success: false,
+                errorCode: 'not_found',
+                errorMessage: 'No purchase order was found with that id.',
+            );
+        }
 
         return new ToolExecutionResult(success: true, data: $result);
     }

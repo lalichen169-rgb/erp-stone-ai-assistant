@@ -59,11 +59,7 @@ class DraftPurchaseOrderServiceTest extends TestCase
             'eta' => '2026-12-15',
             'freight_cost' => '125.50',
             'lines' => [
-                [
-                    'product_id' => $product->id,
-                    'quantity' => 4,
-                    'unit_cost' => '210.00',
-                ],
+                $this->proposalLine($product),
             ],
         ];
     }
@@ -139,10 +135,10 @@ class DraftPurchaseOrderServiceTest extends TestCase
 
         $cases = [
             array_replace($base, ['supplier_id' => 99999]),
-            array_replace($base, ['lines' => [['product_id' => 99999, 'quantity' => 1, 'unit_cost' => '1.00']]]),
+            array_replace($base, ['lines' => [array_replace($this->proposalLine($product, 1, '1.00'), ['product_id' => 99999])]]),
             array_replace($base, ['lines' => []]),
-            array_replace($base, ['lines' => [['product_id' => $product->id, 'quantity' => 0, 'unit_cost' => '1.00']]]),
-            array_replace($base, ['lines' => [['product_id' => $product->id, 'quantity' => 1, 'unit_cost' => '-1.00']]]),
+            array_replace($base, ['lines' => [$this->proposalLine($product, 0, '1.00')]]),
+            array_replace($base, ['lines' => [$this->proposalLine($product, 1, '-1.00')]]),
             array_replace($base, ['freight_cost' => '-5.00']),
             array_replace($base, ['order_date' => 'not-a-date']),
             array_replace($base, ['eta' => '2026-01-01']),

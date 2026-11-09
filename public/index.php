@@ -5,6 +5,11 @@ use Illuminate\Http\Request;
 
 define('LARAVEL_START', microtime(true));
 
+// Project php.ini defaults to 30s for non-CLI SAPI; assistant tooling can exceed that.
+if (function_exists('set_time_limit')) {
+    set_time_limit(600);
+}
+
 // Determine if the application is in maintenance mode...
 if (file_exists($maintenance = __DIR__.'/../storage/framework/maintenance.php')) {
     require $maintenance;

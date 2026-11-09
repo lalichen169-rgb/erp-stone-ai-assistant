@@ -20,6 +20,7 @@ class PurchaseOrderLookupService
      * Search purchase orders without exposing unit costs or freight costs.
      *
      * @param  array{
+     *     purchase_order_id?: int,
      *     supplier_id?: int,
      *     supplier_name?: string,
      *     status?: PurchaseOrderStatus|string,
@@ -70,6 +71,10 @@ class PurchaseOrderLookupService
      */
     private function applyFilters(Builder $query, array $filters): void
     {
+        if (! empty($filters['purchase_order_id'])) {
+            $query->whereKey((int) $filters['purchase_order_id']);
+        }
+
         if (! empty($filters['supplier_id'])) {
             $query->where('supplier_id', (int) $filters['supplier_id']);
         }

@@ -22,7 +22,11 @@ final class ClaudeToolCallingDriver implements AiToolCallingDriverInterface
             model: $original->model,
             metadata: $original->metadata,
             claudeMessages: $this->buildInitialClaudeMessages($original),
-            toolChoice: $definitions === [] ? null : ['type' => 'auto'],
+            toolChoice: $definitions === [] ? null : ($original->toolChoice ?? ['type' => 'auto']),
+            stockCountGrounding: $original->stockCountGrounding,
+            stockCountGroundingQuestion: $original->stockCountGroundingQuestion,
+            stockCountInheritedProductFilters: $original->stockCountInheritedProductFilters,
+            stockCountRawUserMessage: $original->stockCountRawUserMessage,
         );
     }
 
@@ -91,6 +95,10 @@ final class ClaudeToolCallingDriver implements AiToolCallingDriverInterface
             metadata: $original->metadata,
             claudeMessages: $messages,
             toolChoice: $definitions === [] ? null : ['type' => 'auto'],
+            stockCountGrounding: $original->stockCountGrounding,
+            stockCountGroundingQuestion: $original->stockCountGroundingQuestion,
+            stockCountInheritedProductFilters: $original->stockCountInheritedProductFilters,
+            stockCountRawUserMessage: $original->stockCountRawUserMessage,
         );
     }
 

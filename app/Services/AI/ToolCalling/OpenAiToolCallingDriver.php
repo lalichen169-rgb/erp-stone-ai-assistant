@@ -20,8 +20,24 @@ final class OpenAiToolCallingDriver implements AiToolCallingDriverInterface
             tools: $definitions,
             model: $original->model,
             metadata: $original->metadata,
-            toolChoice: $definitions === [] ? null : 'auto',
+            toolChoice: $this->resolveToolChoice($original, $definitions),
+            stockCountGrounding: $original->stockCountGrounding,
+            stockCountGroundingQuestion: $original->stockCountGroundingQuestion,
+            stockCountInheritedProductFilters: $original->stockCountInheritedProductFilters,
+            stockCountRawUserMessage: $original->stockCountRawUserMessage,
         );
+    }
+
+    /**
+     * @param  list<\App\DTOs\AI\AiToolDefinition>  $definitions
+     */
+    private function resolveToolChoice(AiRequest $original, array $definitions): string|array|null
+    {
+        if ($definitions === []) {
+            return null;
+        }
+
+        return $original->toolChoice ?? 'auto';
     }
 
     /**
@@ -68,7 +84,11 @@ final class OpenAiToolCallingDriver implements AiToolCallingDriverInterface
             metadata: $original->metadata,
             openaiPreviousResponseId: $previousId,
             openaiToolOutputInput: $input,
-            toolChoice: $definitions === [] ? null : 'auto',
+            toolChoice: 'auto',
+            stockCountGrounding: $original->stockCountGrounding,
+            stockCountGroundingQuestion: $original->stockCountGroundingQuestion,
+            stockCountInheritedProductFilters: $original->stockCountInheritedProductFilters,
+            stockCountRawUserMessage: $original->stockCountRawUserMessage,
         );
     }
 

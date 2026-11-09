@@ -7,12 +7,29 @@ use App\DTOs\AI\AiMessage;
 use App\DTOs\AI\AiRequest;
 use App\Enums\ConversationMessageRole;
 use App\Enums\ConversationStatus;
+use App\Enums\AssistantRunStatus;
+use App\Models\AssistantRun;
 use App\Models\Conversation;
 use App\Models\ConversationMessage;
 use App\Models\User;
+use Throwable;
 use App\Services\AI\Context\ContextResolutionResult;
 use App\Services\AI\Context\ConversationContextManager;
 use App\Services\AI\Context\FollowUpQuestionResolver;
+use App\Services\AI\Grounding\ProcurementClarificationTurnOutcome;
+use App\Services\AI\Grounding\PurchasingBankDetailsReply;
+use App\Services\AI\Grounding\PurchasingWarehouseDestinationClarification;
+use App\Services\AI\Grounding\ErpDeterministicPreflight;
+use App\Services\AI\Grounding\PurchasingLandedCostReply;
+use App\Services\AI\Grounding\SalesBankDetailsRefusal;
+use App\Services\AI\Grounding\SalesPurchaseOrderCreationRefusal;
+use App\Services\AI\Grounding\SalesSupplierOverduePurchaseOrderAnalysisRefusal;
+use App\Services\AI\Grounding\OverduePurchaseOrderSearchReply;
+use App\Services\AI\Grounding\StockAcrossWarehousesReply;
+use App\Services\AI\Grounding\PurchaseOrderSearchReply;
+use App\Services\AI\Grounding\StockWarehouseCountReply;
+use App\Services\AI\Grounding\StockCountIntentDetector;
+use App\Services\AI\Grounding\StockThreadProductContextExtractor;
 use App\Services\AI\Conversations\ConversationAccessException;
 use App\Services\AI\Conversations\ConversationService;
 use App\Services\AI\Exceptions\AiProviderException;
@@ -29,6 +46,21 @@ final class AssistantRequestService
         private readonly FollowUpQuestionResolver $followUpResolver,
         private readonly ConversationContextManager $contextManager,
         private readonly AiToolCallingService $toolCallingService,
+        private readonly AssistantSystemInstructionBuilder $systemInstructionBuilder,
+        private readonly AssistantRunCoordinator $runCoordinator,
+        private readonly StockCountIntentDetector $stockCountIntentDetector,
+        private readonly StockThreadProductContextExtractor $stockThreadProductContext,
+        private readonly SalesBankDetailsRefusal $salesBankDetailsRefusal,
+        private readonly SalesPurchaseOrderCreationRefusal $salesPurchaseOrderCreationRefusal,
+        private readonly SalesSupplierOverduePurchaseOrderAnalysisRefusal $salesSupplierOverdueAnalysisRefusal,
+        private readonly OverduePurchaseOrderSearchReply $overduePurchaseOrderSearchReply,
+        private readonly PurchasingBankDetailsReply $purchasingBankDetailsReply,
+        private readonly PurchasingLandedCostReply $purchasingLandedCostReply,
+        private readonly ErpDeterministicPreflight $erpDeterministicPreflight,
+        private readonly StockAcrossWarehousesReply $stockAcrossWarehousesReply,
+        private readonly StockWarehouseCountReply $stockWarehouseCountReply,
+        private readonly PurchaseOrderSearchReply $purchaseOrderSearchReply,
+        private readonly PurchasingWarehouseDestinationClarification $purchasingWarehouseDestinationClarification,
     ) {}
 
     /**
@@ -55,7 +87,7 @@ final class AssistantRequestService
             return $this->conversationService->appendUserMessage($user, $conversation, $message);
         });
 
-        return $this->continueAfterUserMessagePersisted($user, $conversation->fresh(), $userMessage, $message, null);
+        return $this->orchestrateTurnAfterUserMessagePersisted($user, $conversation->fresh(), $userMessage, $message, null);
     }
 
     /**
@@ -87,15 +119,20 @@ final class AssistantRequestService
                 return $tx['replay'];
             }
 
-            $result = $this->continueAfterUserMessagePersisted(
+            $pendingAsync = (bool) ($tx['pendingAsync'] ?? false);
+
+            $result = $this->orchestrateTurnAfterUserMessagePersisted(
                 $user,
                 $tx['conversation']->fresh(),
                 $tx['userMessage']->fresh(),
                 $message,
                 $clientIdempotencyKey,
+                $pendingAsync,
             );
 
-            $this->conversationService->saveUserMessageIdempotencyResponse($user, $tx['userMessage']->fresh(), $result);
+            if ($result->httpStatus === 200) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $tx['userMessage']->fresh(), $result);
+            }
 
             return $result;
         } finally {
@@ -134,6 +171,14 @@ final class AssistantRequestService
             $stored = $existing->idempotency_response;
             if (is_array($stored) && $stored !== []) {
                 return ['replay' => AssistantRequestResult::fromStorageArray($stored)];
+            }
+
+            if ($this->usesAsyncAssistant()) {
+                return [
+                    'userMessage' => $existing,
+                    'conversation' => $conversation,
+                    'pendingAsync' => true,
+                ];
             }
 
             throw new AssistantIdempotencyException(
@@ -176,6 +221,14 @@ final class AssistantRequestService
                 return ['replay' => AssistantRequestResult::fromStorageArray($stored)];
             }
 
+            if ($this->usesAsyncAssistant()) {
+                return [
+                    'userMessage' => $existing,
+                    'conversation' => $conversation,
+                    'pendingAsync' => true,
+                ];
+            }
+
             throw new AssistantIdempotencyException(
                 'A previous request with this Idempotency-Key did not finish storing a response.',
                 AssistantIdempotencyException::CODE_IN_PROGRESS,
@@ -188,14 +241,160 @@ final class AssistantRequestService
         ];
     }
 
-    private function continueAfterUserMessagePersisted(
+    public function processQueuedAssistantRun(AssistantRun $run): void
+    {
+        $claimed = DB::transaction(function () use ($run): bool {
+            /** @var AssistantRun|null $locked */
+            $locked = AssistantRun::query()->whereKey($run->id)->lockForUpdate()->first();
+            if ($locked === null || $locked->isTerminal()) {
+                return false;
+            }
+
+            if ($locked->status === AssistantRunStatus::Processing) {
+                return false;
+            }
+
+            if ($locked->status !== AssistantRunStatus::Queued) {
+                return false;
+            }
+
+            $locked->forceFill([
+                'status' => AssistantRunStatus::Processing,
+                'started_at' => now(),
+            ])->save();
+
+            return true;
+        });
+
+        if (! $claimed) {
+            return;
+        }
+
+        $run->refresh();
+        $user = User::query()->find($run->user_id);
+        $conversation = Conversation::query()->find($run->conversation_id);
+        $userMessage = ConversationMessage::query()->find($run->conversation_message_id);
+
+        if ($user === null || $conversation === null || $userMessage === null) {
+            $this->runCoordinator->markFailed($run->fresh(), 'assistant_execution_failed', 'The assistant could not complete this request.');
+
+            return;
+        }
+
+        try {
+            $originalMessage = $run->original_message;
+            $result = $this->executeAiPhase($user, $conversation, $userMessage, $originalMessage);
+            $this->runCoordinator->persistTerminalResult($run->fresh(), $result);
+
+            if ($userMessage->client_idempotency_key !== null && trim((string) $userMessage->client_idempotency_key) !== '') {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+        } catch (Throwable) {
+            $this->runCoordinator->markFailed($run->fresh(), 'assistant_execution_failed', 'The assistant could not complete this request.');
+        }
+    }
+
+    private function orchestrateTurnAfterUserMessagePersisted(
         User $user,
         Conversation $conversation,
         ConversationMessage $userMessage,
         string $message,
         ?string $clientIdempotencyKey,
+        bool $pendingAsync = false,
     ): AssistantRequestResult {
+        if ($pendingAsync) {
+            $run = $this->runCoordinator->findForUserMessage($userMessage);
+            if ($run === null) {
+                throw new AssistantIdempotencyException(
+                    'A previous request with this Idempotency-Key did not finish storing a response.',
+                    AssistantIdempotencyException::CODE_IN_PROGRESS,
+                );
+            }
+
+            return $this->runCoordinator->acceptanceResult($run, $conversation);
+        }
+
+        $procurementResume = $this->purchasingWarehouseDestinationClarification->tryResume(
+            $user,
+            $conversation,
+            $userMessage,
+            $message,
+            $clientIdempotencyKey,
+        );
+        if ($procurementResume !== null) {
+            $result = $this->finalizeProcurementClarificationTurn(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $procurementResume,
+            );
+            if ($clientIdempotencyKey !== null) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+
+            return $result;
+        }
+
+        $salesPoEarlyRefusal = $this->salesPurchaseOrderCreationRefusal->refusalMessageFor($user, $message, $message);
+        if ($salesPoEarlyRefusal !== null) {
+            $result = $this->finalizeDeterministicAssistantReply(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $message,
+                $salesPoEarlyRefusal,
+                [
+                    'deterministic' => true,
+                    'sales_role_restriction' => 'create_draft_purchase_orders',
+                ],
+            );
+            if ($clientIdempotencyKey !== null) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+
+            return $result;
+        }
+
+        $salesOverdueAnalysisRefusal = $this->salesSupplierOverdueAnalysisRefusal->refusalMessageFor($user, $message, $message);
+        if ($salesOverdueAnalysisRefusal !== null) {
+            $result = $this->finalizeDeterministicAssistantReply(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $message,
+                $salesOverdueAnalysisRefusal,
+                [
+                    'deterministic' => true,
+                    'sales_role_restriction' => 'supplier_overdue_purchase_order_analysis',
+                ],
+            );
+            if ($clientIdempotencyKey !== null) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+
+            return $result;
+        }
+
         $resolution = $this->followUpResolver->resolve($message, $conversation);
+
+        if ($resolution->needsClarification) {
+            $preflightResolved = $this->erpDeterministicPreflight->preferredResolvedQuestion(
+                $message,
+                is_string($resolution->resolvedStandaloneQuestion) ? $resolution->resolvedStandaloneQuestion : $message,
+            );
+            if ($this->erpDeterministicPreflight->shouldBypassClarification($user, $message, $preflightResolved)) {
+                $resolution = new ContextResolutionResult(
+                    wasAlreadyStandalone: $preflightResolved === $message,
+                    needsClarification: false,
+                    resolvedStandaloneQuestion: $preflightResolved !== $message ? $preflightResolved : null,
+                    clarificationQuestion: null,
+                    strategy: 'erp_clarification_bypass',
+                );
+            }
+        }
 
         if ($resolution->needsClarification) {
             $result = $this->finalizeClarification($user, $conversation, $userMessage, $message, $resolution);
@@ -225,19 +424,253 @@ final class AssistantRequestService
         $userMessage->refresh();
         $conversation->refresh();
 
+        $procurementBegin = $this->purchasingWarehouseDestinationClarification->tryBegin(
+            $user,
+            $conversation,
+            $message,
+            $resolvedForModel,
+        );
+        if ($procurementBegin !== null) {
+            $result = $this->finalizeProcurementClarificationTurn(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $procurementBegin,
+            );
+            if ($clientIdempotencyKey !== null) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+
+            return $result;
+        }
+
+        $overduePurchaseOrderSearchReply = $this->overduePurchaseOrderSearchReply->tryBuildReply($user, $resolvedForModel, $message);
+        if ($overduePurchaseOrderSearchReply !== null) {
+            $result = $this->finalizeDeterministicAssistantReply(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $resolvedForModel,
+                $overduePurchaseOrderSearchReply,
+                [
+                    'deterministic' => true,
+                    'overdue_purchase_order_disclosure' => true,
+                ],
+            );
+            if ($clientIdempotencyKey !== null) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+
+            return $result;
+        }
+
+        $purchaseOrderSearchReply = $this->purchaseOrderSearchReply->tryBuildReply($user, $resolvedForModel, $message);
+        if ($purchaseOrderSearchReply !== null) {
+            $result = $this->finalizeDeterministicAssistantReply(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $resolvedForModel,
+                $purchaseOrderSearchReply,
+                [
+                    'deterministic' => true,
+                    'purchase_order_search_disclosure' => true,
+                ],
+            );
+            if ($clientIdempotencyKey !== null) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+
+            return $result;
+        }
+
+        $stockAcrossWarehousesReply = $this->stockAcrossWarehousesReply->tryBuildReply($user, $resolvedForModel, $message);
+        if ($stockAcrossWarehousesReply !== null) {
+            $result = $this->finalizeDeterministicAssistantReply(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $resolvedForModel,
+                $stockAcrossWarehousesReply,
+                [
+                    'deterministic' => true,
+                    'stock_across_warehouses_disclosure' => true,
+                ],
+            );
+            if ($clientIdempotencyKey !== null) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+
+            return $result;
+        }
+
+        $stockWarehouseCountReply = $this->stockWarehouseCountReply->tryBuildReply($user, $resolvedForModel, $message);
+        if ($stockWarehouseCountReply !== null) {
+            $result = $this->finalizeDeterministicAssistantReply(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $resolvedForModel,
+                $stockWarehouseCountReply,
+                [
+                    'deterministic' => true,
+                    'stock_warehouse_count_disclosure' => true,
+                ],
+            );
+            if ($clientIdempotencyKey !== null) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+
+            return $result;
+        }
+
+        $salesBankRefusal = $this->salesBankDetailsRefusal->refusalMessageFor($user, $resolvedForModel, $message);
+        if ($salesBankRefusal !== null) {
+            $result = $this->finalizeDeterministicAssistantReply(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $resolvedForModel,
+                $salesBankRefusal,
+                [
+                    'deterministic' => true,
+                    'sales_role_restriction' => 'supplier_bank_details',
+                ],
+            );
+            if ($clientIdempotencyKey !== null) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+
+            return $result;
+        }
+
+        $salesPoCreationRefusal = $this->salesPurchaseOrderCreationRefusal->refusalMessageFor($user, $resolvedForModel, $message);
+        if ($salesPoCreationRefusal !== null) {
+            $result = $this->finalizeDeterministicAssistantReply(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $resolvedForModel,
+                $salesPoCreationRefusal,
+                [
+                    'deterministic' => true,
+                    'sales_role_restriction' => 'create_draft_purchase_orders',
+                ],
+            );
+            if ($clientIdempotencyKey !== null) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+
+            return $result;
+        }
+
+        $purchasingLandedReply = $this->purchasingLandedCostReply->tryBuildReply($user, $resolvedForModel, $message);
+        if ($purchasingLandedReply !== null) {
+            $result = $this->finalizeDeterministicAssistantReply(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $resolvedForModel,
+                $purchasingLandedReply,
+                [
+                    'deterministic' => true,
+                    'purchasing_landed_cost_disclosure' => true,
+                ],
+            );
+            if ($clientIdempotencyKey !== null) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+
+            return $result;
+        }
+
+        $purchasingBankReply = $this->purchasingBankDetailsReply->tryBuildReply($user, $resolvedForModel, $message);
+        if ($purchasingBankReply !== null) {
+            $result = $this->finalizeDeterministicAssistantReply(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $resolvedForModel,
+                $purchasingBankReply,
+                [
+                    'deterministic' => true,
+                    'purchasing_bank_disclosure' => true,
+                ],
+            );
+            if ($clientIdempotencyKey !== null) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+
+            return $result;
+        }
+
+        if ($this->usesAsyncAssistant()) {
+            $existingRun = $this->runCoordinator->findForUserMessage($userMessage);
+            if ($existingRun !== null) {
+                return $this->runCoordinator->acceptanceResult($existingRun, $conversation);
+            }
+
+            $run = $this->runCoordinator->enqueueAfterUserMessage(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $clientIdempotencyKey,
+            );
+
+            return $this->runCoordinator->acceptanceResult($run, $conversation);
+        }
+
+        return $this->executeAiPhase($user, $conversation, $userMessage, $message);
+    }
+
+    private function executeAiPhase(
+        User $user,
+        Conversation $conversation,
+        ConversationMessage $userMessage,
+        string $originalMessage,
+    ): AssistantRequestResult {
+        $resolvedForModel = $this->resolvedQuestionFromUserMessage($userMessage, $originalMessage);
+
+        $aiProvider = strtolower((string) config('ai.provider', 'openai'));
+
         $priorContext = $this->contextManager->buildAiMessages(
             $conversation,
             $user,
             excludeMessageIds: [(int) $userMessage->id],
+            aiProvider: $aiProvider,
         );
 
         $systemInstruction = $this->buildSystemInstruction($user);
 
         $messages = array_values(array_merge($priorContext, [AiMessage::user($resolvedForModel)]));
 
+        $inheritedProductFilters = $this->stockThreadProductContext->inheritProductFilters(
+            $conversation,
+            $userMessage,
+        );
+        $stockGrounding = $this->stockCountIntentDetector->requiresGrounding(
+            $resolvedForModel,
+            $originalMessage,
+            $inheritedProductFilters,
+        );
+
         $aiRequest = new AiRequest(
             messages: $messages,
             systemInstruction: $systemInstruction,
+            stockCountGrounding: $stockGrounding,
+            stockCountGroundingQuestion: $resolvedForModel,
+            stockCountInheritedProductFilters: $inheritedProductFilters,
+            stockCountRawUserMessage: $originalMessage,
         );
 
         $recording = new AiConversationRecording(
@@ -255,7 +688,25 @@ final class AssistantRequestService
             null,
         );
 
-        return $this->outcomeToResult($conversation, $message, $resolvedForModel, $outcome);
+        return $this->outcomeToResult($conversation, $originalMessage, $resolvedForModel, $outcome);
+    }
+
+    private function resolvedQuestionFromUserMessage(ConversationMessage $userMessage, string $fallback): string
+    {
+        $meta = $userMessage->metadata;
+        if (is_array($meta)) {
+            $resolved = $meta['resolved_standalone_question'] ?? null;
+            if (is_string($resolved) && trim($resolved) !== '') {
+                return trim($resolved);
+            }
+        }
+
+        return $fallback;
+    }
+
+    private function usesAsyncAssistant(): bool
+    {
+        return AiProviderProfile::isOllama();
     }
 
     private function resolveConversation(User $user, ?string $publicId): Conversation
@@ -275,6 +726,130 @@ final class AssistantRequestService
                 ConversationAccessException::CODE_INACTIVE,
             );
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $assistantMetadata
+     */
+    private function finalizeDeterministicAssistantReply(
+        User $user,
+        Conversation $conversation,
+        ConversationMessage $userMessage,
+        string $originalMessage,
+        string $resolvedForModel,
+        string $assistantText,
+        array $assistantMetadata = [],
+    ): AssistantRequestResult {
+        DB::transaction(function () use ($user, $conversation, $userMessage, $assistantText, $assistantMetadata): void {
+            Conversation::query()->whereKey($conversation->id)->lockForUpdate()->first();
+
+            $this->conversationService->appendAssistantMessage(
+                $user,
+                $conversation,
+                $assistantText,
+                metadata: $assistantMetadata,
+            );
+        });
+
+        $conversation->refresh();
+
+        return new AssistantRequestResult(
+            success: true,
+            httpStatus: 200,
+            errorCode: 'ok',
+            message: '',
+            data: [
+                'conversation_id' => $conversation->public_id,
+                'message' => $assistantText,
+                'original_message' => $originalMessage,
+                'resolved_question' => $resolvedForModel,
+                'clarification_required' => false,
+                'clarification_question' => null,
+                'provider' => null,
+                'model' => null,
+                'usage' => [
+                    'input_tokens' => null,
+                    'output_tokens' => null,
+                    'total_tokens' => null,
+                ],
+                'tool_calls' => 0,
+                'tool_iterations' => 0,
+                'completed' => true,
+                'incomplete_reason' => null,
+                'error_code' => null,
+            ],
+        );
+    }
+
+    private function finalizeProcurementClarificationTurn(
+        User $user,
+        Conversation $conversation,
+        ConversationMessage $userMessage,
+        string $originalMessage,
+        ProcurementClarificationTurnOutcome $outcome,
+    ): AssistantRequestResult {
+        DB::transaction(function () use ($user, $conversation, $userMessage, $outcome): void {
+            Conversation::query()->whereKey($conversation->id)->lockForUpdate()->first();
+
+            if ($outcome->clarificationRequired) {
+                $this->conversationService->mergeUserMessageResolution(
+                    $user,
+                    $userMessage,
+                    null,
+                    [
+                        'procurement_clarification' => 'warehouse_destination',
+                        'needs_clarification' => true,
+                    ],
+                );
+            }
+
+            $metadata = $outcome->assistantMetadata;
+            if ($outcome->proposal !== null) {
+                $metadata['purchase_order_proposal'] = $outcome->proposal;
+            }
+
+            $this->conversationService->appendAssistantMessage(
+                $user,
+                $conversation,
+                $outcome->assistantText,
+                metadata: $metadata,
+            );
+        });
+
+        $conversation->refresh();
+
+        $data = [
+            'conversation_id' => $conversation->public_id,
+            'message' => $outcome->assistantText,
+            'original_message' => $originalMessage,
+            'resolved_question' => null,
+            'clarification_required' => $outcome->clarificationRequired,
+            'clarification_question' => $outcome->clarificationQuestion,
+            'provider' => null,
+            'model' => null,
+            'usage' => [
+                'input_tokens' => null,
+                'output_tokens' => null,
+                'total_tokens' => null,
+            ],
+            'tool_calls' => 0,
+            'tool_iterations' => 0,
+            'completed' => true,
+            'incomplete_reason' => null,
+            'error_code' => null,
+        ];
+
+        if ($outcome->proposal !== null) {
+            $data['purchase_order_proposal'] = $outcome->proposal;
+        }
+
+        return new AssistantRequestResult(
+            success: true,
+            httpStatus: 200,
+            errorCode: 'ok',
+            message: '',
+            data: $data,
+        );
     }
 
     private function finalizeClarification(
@@ -344,34 +919,37 @@ final class AssistantRequestService
      */
     private function resolvedQuestionForModel(string $trimmedOriginal, ContextResolutionResult $resolution): string
     {
+        $resolved = $resolution->resolvedStandaloneQuestion;
+        if (is_string($resolved) && trim($resolved) !== '') {
+            return trim($resolved);
+        }
+
         if ($resolution->wasAlreadyStandalone) {
             return $trimmedOriginal;
         }
 
-        $resolved = $resolution->resolvedStandaloneQuestion;
-
-        return (is_string($resolved) && trim($resolved) !== '') ? trim($resolved) : $trimmedOriginal;
+        return $trimmedOriginal;
     }
 
     private function buildSystemInstruction(User $user): string
     {
-        $roleLine = $user->isPurchasing()
-            ? 'The user has the Purchasing role and may use cost-related tools where registered.'
-            : 'The user has the Sales role. Do not surface unit costs, freight costs, landed costs, supplier bank details, or use cost-only tools. If the user asks for restricted data, explain briefly that it is not available to their role.';
+        if (strtolower((string) config('ai.provider')) !== 'ollama') {
+            return $this->systemInstructionBuilder->buildLegacy($user);
+        }
 
-        return <<<TXT
-You are the Stone ERP AI assistant embedded in a B2B stone slab distributor application.
+        return $this->systemInstructionBuilder->build(
+            $user,
+            $this->useCompactSystemInstructions(),
+        );
+    }
 
-{$roleLine}
+    private function useCompactSystemInstructions(): bool
+    {
+        if (strtolower((string) config('ai.provider')) !== 'ollama') {
+            return false;
+        }
 
-Rules:
-- Use only the registered ERP tools for factual questions about inventory, purchase orders, overdue orders, landed cost (Purchasing only), and draft PO proposals (Purchasing only).
-- Never invent stock quantities, prices, costs, suppliers, purchase orders, or proposal IDs. Ground factual answers in tool results only.
-- Do not claim a tool succeeded if the tool returned an error.
-- Do not claim a purchase order was created because a draft proposal was created. Draft proposals require explicit confirmation through the application's confirmation API.
-- If tools return partial information, say so. Ask for clarification when filters are ambiguous and tools cannot be called safely.
-- Respond concisely in plain language suitable for business users.
-TXT;
+        return (bool) config('ai.assistant.compact_system_instructions', false);
     }
 
     private function outcomeToResult(
@@ -440,6 +1018,8 @@ TXT;
             AiProviderException::CODE_TIMEOUT => [504, 'ai_timeout', 'The AI request timed out. Try again.'],
             AiProviderException::CODE_SERVER_ERROR => [503, 'ai_server_error', 'The AI service is temporarily unavailable. Try again later.'],
             AiProviderException::CODE_INVALID_RESPONSE => [502, 'ai_invalid_response', 'The AI service returned an invalid response.'],
+            AiProviderException::CODE_PROVIDER_ERROR,
+            AiProviderException::CODE_UNSUPPORTED_PROVIDER => [502, 'ai_provider_error', 'The AI service could not complete this request. Try again.'],
             AiToolLoopException::CODE_MAX_ITERATIONS => [422, 'tool_loop_limit', 'The tool-calling limit was reached for this answer.'],
             AiToolLoopException::CODE_MAX_TOOL_CALLS => [422, 'tool_calls_limit', 'Too many tool calls were needed for one answer.'],
             AiToolLoopException::CODE_REPEATED_SAME_CALLS => [422, 'tool_loop_repeated_calls', 'Repeated identical tool calls were stopped to prevent a loop.'],

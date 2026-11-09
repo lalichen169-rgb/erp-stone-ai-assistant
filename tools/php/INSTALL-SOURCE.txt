@@ -19,3 +19,6 @@ Download cache (optional to delete after install):
 Installed: 2026-11-05
 
 This runtime is independent of XAMPP (C:\xampp\php). Removing tools\php\ does not affect XAMPP.
+
+StoneERP php.ini overrides (apply after reinstall from ZIP):
+  See stoneerp-overrides.ini — max_execution_time and max_input_time = 600 (10 minutes).

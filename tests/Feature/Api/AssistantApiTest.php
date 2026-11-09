@@ -90,6 +90,7 @@ class AssistantApiTest extends TestCase
     {
         Config::set('ai.provider', 'openai');
         Config::set('ai.openai.api_key', 'testing-openai-key-not-for-production');
+        $this->disableAssistantStockGroundingForProviderToolTests();
 
         $this->seedCalacattaStockScenario();
 
@@ -190,6 +191,7 @@ class AssistantApiTest extends TestCase
     {
         Config::set('ai.provider', 'openai');
         Config::set('ai.openai.api_key', 'testing-openai-key-not-for-production');
+        $this->disableAssistantStockGroundingForProviderToolTests();
 
         $this->seedCalacattaStockScenario();
 
@@ -238,13 +240,18 @@ class AssistantApiTest extends TestCase
         $this->assertNotEmpty($body['conversation_id']);
         $this->assertStringContainsString('42', (string) $body['message']);
 
-        $this->assertSame(1, ConversationToolCall::query()->count());
+        $conversation = \App\Models\Conversation::query()
+            ->where('public_id', $body['conversation_id'])
+            ->first();
+        $this->assertNotNull($conversation);
+        $this->assertSame(1, ConversationToolCall::query()->where('conversation_id', $conversation->id)->count());
     }
 
     public function test_follow_up_dallas_resolves_and_uses_stock_tool(): void
     {
         Config::set('ai.provider', 'openai');
         Config::set('ai.openai.api_key', 'testing-openai-key-not-for-production');
+        $this->disableAssistantStockGroundingForProviderToolTests();
 
         $this->seedCalacattaStockScenario();
 
@@ -327,6 +334,112 @@ class AssistantApiTest extends TestCase
         $this->assertStringContainsString('Dallas', (string) ($lastUser->metadata['resolved_standalone_question'] ?? ''));
     }
 
+    public function test_ollama_conversation_follow_up_does_not_fail_after_prior_tool_turn(): void
+    {
+        Config::set('ai.provider', 'ollama');
+        Config::set('ai.ollama.base_url', 'http://ollama.test');
+        Config::set('ai.ollama.model', 'llama3.1:8b');
+        Config::set('ai.assistant.enforce_stock_grounding', false);
+
+        $this->seedCalacattaStockScenario();
+        $this->actingAsSanctum($this->createSalesApiUser());
+
+        Http::fake([
+            'http://ollama.test/api/chat' => Http::sequence()
+                ->push([
+                    'model' => 'llama3.1:8b',
+                    'message' => [
+                        'role' => 'assistant',
+                        'content' => '',
+                        'tool_calls' => [[
+                            'id' => 'call_houston',
+                            'function' => [
+                                'name' => 'checkStock',
+                                'arguments' => [
+                                    'material' => 'Quartz',
+                                    'color' => 'Calacatta',
+                                    'thickness_cm' => '3.00',
+                                    'warehouse_name' => 'Houston',
+                                ],
+                            ],
+                        ]],
+                    ],
+                ], 200)
+                ->push([
+                    'model' => 'llama3.1:8b',
+                    'message' => [
+                        'role' => 'assistant',
+                        'content' => '42 slabs in Houston.',
+                    ],
+                ], 200)
+                ->push([
+                    'model' => 'llama3.1:8b',
+                    'message' => [
+                        'role' => 'assistant',
+                        'content' => '',
+                        'tool_calls' => [[
+                            'id' => 'call_dallas',
+                            'function' => [
+                                'name' => 'checkStock',
+                                'arguments' => [
+                                    'material' => 'Quartz',
+                                    'color' => 'Calacatta',
+                                    'thickness_cm' => '3.00',
+                                    'warehouse_name' => 'Dallas',
+                                ],
+                            ],
+                        ]],
+                    ],
+                ], 200)
+                ->push([
+                    'model' => 'llama3.1:8b',
+                    'message' => [
+                        'role' => 'assistant',
+                        'content' => '18 slabs in Dallas.',
+                    ],
+                ], 200),
+        ]);
+
+        $first = $this->postJson('/api/assistant', [
+            'message' => 'How many 3cm Calacatta slabs do we have in Houston?',
+        ]);
+        $first->assertStatus(202);
+        $run1 = \App\Models\AssistantRun::query()->where('public_id', $first->json('data.run_id'))->first();
+        $this->assertNotNull($run1);
+        app(\App\Services\AI\AssistantRequestService::class)->processQueuedAssistantRun($run1);
+
+        $cid = $first->json('data.conversation_id');
+
+        $second = $this->postJson('/api/assistant', [
+            'conversation_id' => $cid,
+            'message' => 'And in Dallas?',
+        ]);
+
+        $second->assertStatus(202);
+        $run2 = \App\Models\AssistantRun::query()->where('public_id', $second->json('data.run_id'))->first();
+        $this->assertNotNull($run2);
+        app(\App\Services\AI\AssistantRequestService::class)->processQueuedAssistantRun($run2);
+
+        $poll = $this->getJson('/api/assistant/runs/'.$run2->public_id);
+        $poll->assertOk();
+        $this->assertStringContainsString('18', (string) $poll->json('data.answer'));
+
+        Http::assertSent(function ($request): bool {
+            if ($request->url() !== 'http://ollama.test/api/chat') {
+                return false;
+            }
+
+            $messages = $request->data()['messages'] ?? [];
+            foreach ($messages as $message) {
+                if (($message['role'] ?? '') === 'tool' && ($message['tool_name'] ?? '') === 'checkStock') {
+                    return true;
+                }
+            }
+
+            return false;
+        });
+    }
+
     public function test_clarification_does_not_call_tools(): void
     {
         Config::set('ai.provider', 'openai');
@@ -370,6 +483,7 @@ class AssistantApiTest extends TestCase
         Config::set('ai.provider', 'claude');
         Config::set('ai.claude.api_key', 'testing-anthropic-key');
         Config::set('ai.claude.model', 'claude-test-model');
+        $this->disableAssistantStockGroundingForProviderToolTests();
 
         $this->seedCalacattaStockScenario();
 
@@ -413,6 +527,98 @@ class AssistantApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.completed', true)
             ->assertJsonPath('data.provider', 'claude');
+    }
+
+    public function test_openai_sales_supplier_bank_details_returns_role_refusal_not_execution_failed(): void
+    {
+        Config::set('ai.provider', 'openai');
+        Config::set('ai.openai.api_key', 'testing-openai-key-not-for-production');
+        Config::set('ai.assistant.enforce_sales_bank_refusal', true);
+
+        OpenAI::fake([]);
+
+        $this->actingAsSanctum($this->createSalesApiUser());
+
+        $json = $this->postJson('/api/assistant', [
+            'message' => 'Supplier bank details for Gulf Stone Imports',
+        ])->assertOk()->json();
+
+        $this->assertTrue($json['success']);
+        $this->assertTrue($json['data']['completed'] ?? false);
+        $this->assertStringContainsStringIgnoringCase('Sales role', (string) ($json['data']['message'] ?? ''));
+        $this->assertNull($json['data']['provider']);
+        $this->assertNotSame('assistant_execution_failed', $json['error']['code'] ?? null);
+    }
+
+    public function test_openai_purchasing_supplier_bank_details_uses_search_without_leak(): void
+    {
+        Config::set('ai.provider', 'openai');
+        Config::set('ai.openai.api_key', 'testing-openai-key-not-for-production');
+        Config::set('ai.assistant.enforce_purchasing_bank_disclosure', true);
+
+        $supplier = $this->createSupplierWithName('Demo Supplier — Gulf Stone Imports');
+        $supplier->bank_details = 'Demo Bank — Account DEMO-GSI-API — Routing DEMO-111000';
+        $supplier->save();
+
+        OpenAI::fake([]);
+
+        $this->actingAsSanctum($this->createPurchasingApiUser());
+
+        $json = $this->postJson('/api/assistant', [
+            'message' => 'Supplier bank details for Gulf Stone Imports',
+        ])->assertOk()->json();
+
+        $this->assertTrue($json['success']);
+        $this->assertStringContainsString('DEMO-GSI-API', (string) ($json['data']['message'] ?? ''));
+        $this->assertNull($json['data']['provider']);
+    }
+
+    public function test_claude_sales_supplier_bank_details_returns_role_refusal_not_execution_failed(): void
+    {
+        Config::set('ai.provider', 'claude');
+        Config::set('ai.claude.api_key', 'testing-anthropic-key');
+        Config::set('ai.claude.model', 'claude-test-model');
+        Config::set('ai.assistant.enforce_sales_bank_refusal', true);
+
+        Http::fake();
+
+        $this->actingAsSanctum($this->createSalesApiUser());
+
+        $json = $this->postJson('/api/assistant', [
+            'message' => 'Supplier bank details for Gulf Stone Imports',
+        ])->assertOk()->json();
+
+        $this->assertTrue($json['success']);
+        $this->assertTrue($json['data']['completed'] ?? false);
+        $this->assertNull($json['data']['provider']);
+        $this->assertStringContainsStringIgnoringCase('Sales role', (string) ($json['data']['message'] ?? ''));
+        $this->assertNotSame('assistant_execution_failed', $json['error']['code'] ?? null);
+        Http::assertNothingSent();
+    }
+
+    public function test_claude_purchasing_supplier_bank_details_can_call_search_suppliers(): void
+    {
+        Config::set('ai.provider', 'claude');
+        Config::set('ai.claude.api_key', 'testing-anthropic-key');
+        Config::set('ai.claude.model', 'claude-test-model');
+        Config::set('ai.assistant.enforce_purchasing_bank_disclosure', true);
+
+        $supplier = $this->createSupplierWithName('Demo Supplier — Gulf Stone Imports');
+        $supplier->bank_details = 'Demo Bank — Account DEMO-GSI-CLAUDE';
+        $supplier->save();
+
+        Http::fake();
+
+        $this->actingAsSanctum($this->createPurchasingApiUser());
+
+        $json = $this->postJson('/api/assistant', [
+            'message' => 'Supplier bank details for Gulf Stone Imports',
+        ])->assertOk()->json();
+
+        $this->assertTrue($json['success']);
+        $this->assertNull($json['data']['provider']);
+        $this->assertStringContainsString('DEMO-GSI-CLAUDE', (string) ($json['data']['message'] ?? ''));
+        Http::assertNothingSent();
     }
 
     public function test_sales_get_landed_cost_tool_denied_in_answer(): void
@@ -459,6 +665,7 @@ class AssistantApiTest extends TestCase
     {
         Config::set('ai.provider', 'openai');
         Config::set('ai.openai.api_key', 'testing-openai-key-not-for-production');
+        Config::set('ai.assistant.enforce_purchasing_landed_cost_disclosure', false);
 
         $supplier = $this->createSupplierWithName('LC Assist B');
         $product = $this->createCalacattaThreeCmDemoProduct();
@@ -512,13 +719,14 @@ class AssistantApiTest extends TestCase
 
         $product = $this->createCalacattaThreeCmDemoProduct();
         $supplier = $this->createSupplierWithName('Assist Supplier');
+        $warehouseId = $this->createHoustonDallasAustinWarehouses()['houston']->id;
 
         $args = json_encode([
             'supplier_id' => $supplier->id,
             'order_date' => '2026-11-06',
             'freight_cost' => '10.00',
             'lines' => [
-                ['product_id' => $product->id, 'quantity' => 2, 'unit_cost' => '25.00'],
+                ['product_id' => $product->id, 'warehouse_id' => $warehouseId, 'quantity' => 2, 'unit_cost' => '25.00'],
             ],
         ], JSON_THROW_ON_ERROR);
 

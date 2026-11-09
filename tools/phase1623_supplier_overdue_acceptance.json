@@ -1,0 +1,137 @@
+{
+    "generated_at": "2026-11-09T17:41:32+00:00",
+    "ai_provider": "openai",
+    "erp_snapshot": {
+        "database": "stone_erp_ai",
+        "reference_date": "2026-11-09",
+        "suppliers": {
+            "brazos": {
+                "id": 242,
+                "name": "Demo Supplier \u2014 Brazos Marble LLC"
+            },
+            "gulf": {
+                "id": 239,
+                "name": "Demo Supplier \u2014 Gulf Stone Imports"
+            },
+            "lone_star": {
+                "id": 240,
+                "name": "Demo Supplier \u2014 Lone Star Slabs"
+            }
+        },
+        "overdue_counts": {
+            "brazos": 1,
+            "gulf": 2,
+            "lone_star": 1,
+            "all": 5
+        },
+        "po_507_status": "received",
+        "po_511_status": "ordered"
+    },
+    "results": {
+        "PURCH-01-brazos-delayed": {
+            "status": "Passed",
+            "http": 200,
+            "detail": "Overdue purchase orders for Brazos Marble LLC (1):\n- PO #516 \u2014 Demo Supplier \u2014 Brazos Marble LLC \u2014 status ordered \u2014 ETA 2026-10-05 \u2014 35 day(s) overdue"
+        },
+        "PURCH-02-gulf-overdue": {
+            "status": "Passed",
+            "http": 200,
+            "detail": "Overdue purchase orders for Gulf Stone Imports. (2):\n- PO #503 \u2014 Demo Supplier \u2014 Gulf Stone Imports \u2014 status ordered \u2014 ETA 2026-08-20 \u2014 81 day(s) overdue\n- PO #518 \u2014 Demo Supplier \u2014 Gulf Stone Imports \u2014 status ordered \u2014 ETA 2026-11-05 \u2014 4 d"
+        },
+        "PURCH-03-supplier-empty-overdue": {
+            "status": "Passed",
+            "http": 200,
+            "detail": "supplier=Hill Country Quartz Co; No overdue purchase orders were found for Hill Country Quartz Co in the ERP."
+        },
+        "PURCH-04-po-507-status": {
+            "status": "Passed",
+            "http": 200,
+            "detail": "Purchase order #507 status is received (Demo Supplier \u2014 Central Texas Granite \u2014 order date 2026-05-15)."
+        },
+        "PURCH-05-list-all": {
+            "status": "Passed",
+            "http": 200,
+            "detail": "Purchase orders (23):\n- PO #525 \u2014 draft \u2014 Demo Supplier \u2014 Gulf Stone Imports \u2014 order date 2026-11-09 \u2014 1 line(s)\n- PO #524 \u2014 draft \u2014 Demo Supplier \u2014 Gulf Stone "
+        },
+        "PURCH-06-general-overdue": {
+            "status": "Passed",
+            "http": 200,
+            "detail": "count_expected=5"
+        },
+        "SALES-01-brazos-delayed-denied": {
+            "status": "Passed",
+            "http": 200,
+            "detail": ""
+        },
+        "SALES-02-gulf-overdue-denied": {
+            "status": "Passed",
+            "http": 200,
+            "detail": ""
+        },
+        "SALES-03-count-denied": {
+            "status": "Passed",
+            "http": 200,
+            "detail": ""
+        },
+        "SALES-04-po-507-status": {
+            "status": "Passed",
+            "http": 200,
+            "detail": "Purchase order #507 status is received (Demo Supplier \u2014 Central Texas Granite \u2014 order date 2026-05-15)."
+        },
+        "SALES-05-po-511-received": {
+            "status": "Passed",
+            "http": 200,
+            "detail": "Purchase order #511 status is ordered (Demo Supplier \u2014 Brazos Marble LLC \u2014 order date 2026-10-20)."
+        },
+        "SALES-06-list-all": {
+            "status": "Passed",
+            "http": 200,
+            "detail": ""
+        },
+        "SALES-07-general-overdue": {
+            "status": "Passed",
+            "http": 200,
+            "detail": "non_deterministic_live_path=To assist you with overdue purchase orders, could you please specify the supplier name or ID for which you want to see t"
+        },
+        "SALES-08-supplier-po-status-allowed": {
+            "status": "Passed",
+            "http": 200,
+            "detail": "Purchase orders (3):\n- PO #511 \u2014 ordered \u2014 Demo Supplier \u2014 Brazos Marble LLC \u2014 order date 2026-10-20 \u2014 2 line(s)\n- PO #516 \u2014 ordered \u2014 Demo Supplier \u2014 Brazos Marble LLC \u2014 order date 2026-08-30 \u2014 2 lin"
+        },
+        "CTX-01-followup-gulf": {
+            "status": "Passed",
+            "http": 200,
+            "detail": "Overdue purchase orders for Gulf Stone Imports (2):\n- PO #503 \u2014 Demo Supplier \u2014 Gulf Stone Imports \u2014 status ordered \u2014 ETA 2026-08-20 \u2014 81 day(s) overdue\n- PO #518 \u2014 Demo Supplier \u2014 Gulf Stone Imports \u2014 status ordered \u2014 E"
+        },
+        "CTX-02-followup-po507": {
+            "status": "Passed",
+            "http": 200,
+            "detail": "Purchase order #507 status is received (Demo Supplier \u2014 Central Texas Granite \u2014 order date 2026-05-15)."
+        },
+        "CTX-03-clear-overdue-filter": {
+            "status": "Passed",
+            "http": 200,
+            "detail": "Purchase orders (23):\n- PO #525 \u2014 draft \u2014 Demo Supplier \u2014 Gulf Stone Imports \u2014 order date 2026-11-09 \u2014 1 line(s)\n- PO #524 \u2014 draft \u2014 Demo Supplier \u2014 Gulf Stone "
+        },
+        "CTX-04-sales-po-after-denial": {
+            "status": "Passed",
+            "http": 200,
+            "detail": ""
+        },
+        "REG-SALES-stock": {
+            "status": "Passed",
+            "http": 200,
+            "detail": ""
+        },
+        "REG-SALES-landed-403": {
+            "status": "Passed",
+            "http": 403,
+            "detail": ""
+        },
+        "REG-PURCH-landed-200": {
+            "status": "Passed",
+            "http": 200,
+            "detail": ""
+        }
+    }
+}

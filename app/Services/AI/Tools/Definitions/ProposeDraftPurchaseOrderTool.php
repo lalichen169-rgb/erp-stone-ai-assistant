@@ -4,6 +4,7 @@ namespace App\Services\AI\Tools\Definitions;
 
 use App\DTOs\AI\AiToolDefinition;
 use App\Models\User;
+use App\Services\AI\Tools\Concerns\LegacyExecutionMatchesEnhanced;
 use App\Services\AI\Tools\Concerns\ValidatesToolArguments;
 use App\Services\AI\Tools\Contracts\AiToolInterface;
 use App\Services\AI\Tools\ToolExecutionContext;
@@ -13,6 +14,7 @@ use App\Services\Erp\Exceptions\PurchaseOrderProposalException;
 
 final class ProposeDraftPurchaseOrderTool implements AiToolInterface
 {
+    use LegacyExecutionMatchesEnhanced;
     use ValidatesToolArguments;
 
     public function __construct(private readonly DraftPurchaseOrderService $draftPurchaseOrderService) {}
@@ -20,6 +22,11 @@ final class ProposeDraftPurchaseOrderTool implements AiToolInterface
     public function name(): string
     {
         return 'proposeDraftPurchaseOrder';
+    }
+
+    public function legacyDefinition(): AiToolDefinition
+    {
+        return $this->definition();
     }
 
     public function definition(): AiToolDefinition
@@ -43,9 +50,10 @@ final class ProposeDraftPurchaseOrderTool implements AiToolInterface
                         'items' => [
                             'type' => 'object',
                             'additionalProperties' => false,
-                            'required' => ['product_id', 'quantity', 'unit_cost'],
+                            'required' => ['product_id', 'quantity', 'unit_cost', 'warehouse_id'],
                             'properties' => [
                                 'product_id' => ['type' => 'integer', 'minimum' => 1],
+                                'warehouse_id' => ['type' => 'integer', 'minimum' => 1, 'description' => 'Destination warehouse id from resolveWarehouseForPurchase'],
                                 'quantity' => ['type' => 'integer', 'minimum' => 1],
                                 'unit_cost' => ['type' => ['string', 'number']],
                             ],
@@ -89,6 +97,7 @@ final class ProposeDraftPurchaseOrderTool implements AiToolInterface
             'freight_cost' => ['required', 'numeric', 'min:0'],
             'lines' => ['required', 'array', 'min:1', 'max:50'],
             'lines.*.product_id' => ['required', 'integer', 'min:1', 'exists:products,id'],
+            'lines.*.warehouse_id' => ['required', 'integer', 'min:1', 'exists:warehouses,id'],
             'lines.*.quantity' => ['required', 'integer', 'min:1'],
             'lines.*.unit_cost' => ['required', 'numeric', 'min:0'],
         ]);
@@ -104,6 +113,7 @@ final class ProposeDraftPurchaseOrderTool implements AiToolInterface
             'lines' => array_map(
                 fn (array $line) => [
                     'product_id' => (int) $line['product_id'],
+                    'warehouse_id' => (int) $line['warehouse_id'],
                     'quantity' => (int) $line['quantity'],
                     'unit_cost' => $line['unit_cost'],
                 ],

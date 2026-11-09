@@ -35,6 +35,19 @@ class AiDtosTest extends TestCase
         $this->assertSame([], $request->messages);
     }
 
+    public function test_ai_request_allows_ollama_conversation_without_initial_messages(): void
+    {
+        $request = new AiRequest(
+            messages: [],
+            ollamaMessages: [
+                ['role' => 'user', 'content' => 'Hello'],
+            ],
+        );
+
+        $this->assertSame([], $request->messages);
+        $this->assertCount(1, $request->ollamaMessages);
+    }
+
     public function test_ai_request_accepts_tool_definitions_without_execution(): void
     {
         $request = new AiRequest(

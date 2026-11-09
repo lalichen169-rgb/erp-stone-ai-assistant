@@ -54,6 +54,7 @@ flowchart LR
 |-------|----------------|
 | `openai` | `OpenAiProvider` |
 | `claude` / `anthropic` | `ClaudeProvider` |
+| `ollama` | `OllamaProvider` |
 | `bedrock`, `gemini`, `groq` | Clear “not implemented” exception |
 
 Register new providers in the factory only; ERP code stays unchanged.
@@ -71,6 +72,14 @@ Register new providers in the factory only; ERP code stays unchanged.
 - Uses Laravel HTTP client against Anthropic **Messages API** (`/v1/messages`).
 - No Anthropic SDK in application services.
 - Maps system prompt, messages, optional tools, usage blocks → `AiResponse`.
+
+## OllamaProvider
+
+- Uses Laravel HTTP client against a configured Ollama host (**`POST /api/chat`**, non-streaming).
+- Sends native `tools` definitions; parses `message.tool_calls` into normalized `AiToolCall` DTOs.
+- Tool-loop continuation uses `OllamaToolCallingDriver` (assistant message + `role: tool` results in chat history).
+- Optional usage: `prompt_eval_count` / `eval_count` when Ollama returns them.
+- **`POST /api/generate`** is for simple text generation only (optional smoke tests); the ERP agent does **not** use it for tools.
 
 ## AiAgentService
 
@@ -96,7 +105,7 @@ File: `config/ai.php` (env-driven).
 
 | Variable | Purpose |
 |----------|---------|
-| `AI_PROVIDER` | `openai` (default) or `claude` |
+| `AI_PROVIDER` | `openai` (default), `claude`, or `ollama` |
 | `OPENAI_API_KEY` | OpenAI key (local `.env` only) |
 | `OPENAI_MODEL` | Default model (e.g. `gpt-4o-mini`) |
 | `OPENAI_ORGANIZATION` | Optional |
@@ -108,6 +117,11 @@ File: `config/ai.php` (env-driven).
 | `ANTHROPIC_BASE_URL` | Default `https://api.anthropic.com` |
 | `ANTHROPIC_REQUEST_TIMEOUT` | Seconds |
 | `ANTHROPIC_MAX_OUTPUT_TOKENS` | Claude `max_tokens` |
+| `AI_OLLAMA_BASE_URL` | Ollama server base URL (no trailing slash required) |
+| `AI_OLLAMA_MODEL` | Model tag (e.g. `llama3.1:8b`) |
+| `AI_OLLAMA_TIMEOUT` | Chat request timeout (seconds) |
+| `AI_OLLAMA_CONNECT_TIMEOUT` | TCP connect timeout (seconds) |
+| `AI_OLLAMA_KEEP_ALIVE` | Ollama `keep_alive` (e.g. `5m`) |
 | `AI_MAX_TOOL_ITERATIONS` | Tool loop rounds (Phase 6.3) |
 | `AI_MAX_TOOL_CALLS` | Max executed tool calls per run (Phase 6.3) |
 
@@ -115,7 +129,7 @@ Copy placeholders from `.env.example`. **Never commit real keys.**
 
 ## Manual verification (real API — local only)
 
-After setting `OPENAI_API_KEY` (or Claude credentials) in `.env`:
+After setting `OPENAI_API_KEY`, Claude credentials, or a reachable `AI_OLLAMA_BASE_URL` in `.env`:
 
 ```bash
 .\scripts\dev.cmd php artisan ai:verify-connection

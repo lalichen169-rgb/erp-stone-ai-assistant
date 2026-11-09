@@ -100,10 +100,21 @@ class OpenAiProviderTest extends TestCase
 
         $psrResponse = $this->createMock(ResponseInterface::class);
         $psrResponse->method('getStatusCode')->willReturn(401);
+        $psrResponse->method('getHeaderLine')
+            ->willReturnCallback(static function (string $name): string {
+                return match (strtolower($name)) {
+                    'x-request-id' => 'req_diag_01',
+                    default => '',
+                };
+            });
 
         $responses = $this->createMock(ResponsesContract::class);
         $responses->method('create')->willThrowException(
-            new ErrorException(['message' => 'Incorrect API key provided: sk-secret'], $psrResponse)
+            new ErrorException([
+                'message' => 'Incorrect API key provided: sk-secret',
+                'type' => 'invalid_request_error',
+                'code' => 'invalid_api_key',
+            ], $psrResponse)
         );
 
         $client = $this->createMock(ClientContract::class);
@@ -111,12 +122,19 @@ class OpenAiProviderTest extends TestCase
 
         $provider = new OpenAiProvider($client);
 
-        $this->expectException(AiProviderException::class);
-        $this->expectExceptionMessage('authentication failed');
-
-        $provider->complete(new AiRequest(
-            messages: [AiMessage::user('Hi')],
-        ));
+        try {
+            $provider->complete(new AiRequest(
+                messages: [AiMessage::user('Hi')],
+            ));
+            $this->fail('Expected AiProviderException');
+        } catch (AiProviderException $e) {
+            $this->assertSame(AiProviderException::CODE_AUTHENTICATION, $e->errorCode());
+            $this->assertSame(401, $e->httpStatus());
+            $this->assertSame('OpenAI authentication failed.', $e->getMessage());
+            $this->assertNull($e->providerErrorType());
+            $this->assertNull($e->providerErrorCode());
+            $this->assertNull($e->requestId());
+        }
     }
 
     public function test_missing_openai_api_key_fails_clearly(): void
@@ -196,6 +214,38 @@ class OpenAiProviderTest extends TestCase
                 && $input[0]['call_id'] === 'call_abc'
                 && ($input[0]['type'] ?? null) === 'function_call_output'
                 && ! array_key_exists('id', $input[0]);
+        });
+    }
+
+    public function test_openai_provider_strips_non_string_metadata_from_responses_payload(): void
+    {
+        Config::set('ai.openai.api_key', 'testing-openai-key-not-for-production');
+
+        $client = OpenAI::fake([
+            CreateResponse::fake([
+                'output' => [
+                    AiTestResponses::openAiAssistantMessage('OK'),
+                ],
+            ], strategy: OverrideStrategy::Replace),
+        ]);
+
+        (new OpenAiProvider($client))->complete(new AiRequest(
+            messages: [AiMessage::user('Hi')],
+            metadata: [
+                'stock_count_grounding' => true,
+                'trace_id' => 'abc-123',
+                '_internal' => 'hidden',
+            ],
+        ));
+
+        OpenAI::assertSent(Responses::class, function (string $method, array $parameters): bool {
+            if ($method !== 'create') {
+                return false;
+            }
+
+            $metadata = $parameters['metadata'] ?? [];
+
+            return $metadata === ['trace_id' => 'abc-123'];
         });
     }
 }

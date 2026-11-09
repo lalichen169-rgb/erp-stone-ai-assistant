@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\AssistantController;
+use App\Http\Controllers\Api\AssistantRunController;
 use App\Http\Controllers\Api\Auth\CurrentUserController;
 use App\Http\Controllers\Api\Auth\TokenController;
 use App\Http\Controllers\Api\Erp\LandedCostController;
@@ -19,6 +20,9 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::delete('/auth/token', [TokenController::class, 'destroy']);
 
     Route::post('/assistant', [AssistantController::class, 'store'])
+        ->middleware('throttle:api-assistant');
+
+    Route::get('/assistant/runs/{runId}', [AssistantRunController::class, 'show'])
         ->middleware('throttle:api-assistant');
 
     Route::get('/products', [ProductController::class, 'index']);

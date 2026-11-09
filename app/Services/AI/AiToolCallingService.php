@@ -9,6 +9,7 @@ use App\DTOs\AI\AiToolCall;
 use App\DTOs\AI\AiToolCallingOutcome;
 use App\Models\User;
 use App\Support\AiSafeText;
+use App\Services\AI\AiProviderProfile;
 use App\Services\AI\Conversations\ConversationSummaryService;
 use App\Services\AI\Conversations\ConversationTurnRecorder;
 use App\Services\AI\Exceptions\AiProviderException;
@@ -17,7 +18,9 @@ use App\Services\AI\ToolCalling\AiToolCallingDriverFactory;
 use App\Services\AI\Tools\ToolExecutionContext;
 use App\Services\AI\Tools\ToolExecutionResult;
 use App\Services\AI\Tools\ToolExecutor;
+use App\Services\AI\Grounding\StockCountGroundingEnforcer;
 use App\Services\AI\Tools\ToolRegistry;
+use Throwable;
 
 final class AiToolCallingService
 {
@@ -27,6 +30,7 @@ final class AiToolCallingService
         private readonly ToolExecutor $toolExecutor,
         private readonly AiToolCallingDriverFactory $driverFactory,
         private readonly ConversationSummaryService $summaryService,
+        private readonly StockCountGroundingEnforcer $stockCountGrounding,
     ) {}
 
     public function run(
@@ -78,12 +82,18 @@ final class AiToolCallingService
             openaiPreviousResponseId: $request->openaiPreviousResponseId,
             openaiToolOutputInput: $request->openaiToolOutputInput,
             claudeMessages: $request->claudeMessages,
+            ollamaMessages: $request->ollamaMessages,
             toolChoice: $request->toolChoice,
+            stockCountGrounding: $request->stockCountGrounding,
+            stockCountGroundingQuestion: $request->stockCountGroundingQuestion,
+            stockCountInheritedProductFilters: $request->stockCountInheritedProductFilters,
+            stockCountRawUserMessage: $request->stockCountRawUserMessage,
         );
 
-        $definitions = $this->toolRegistry->definitionsFor($user);
+        $provider = AiProviderProfile::normalize();
+        $definitions = $this->toolRegistry->definitionsFor($user, $provider);
 
-        $driver = $this->driverFactory->make();
+        $driver = $this->driverFactory->make($provider);
 
         $aggregatedInput = 0;
         $aggregatedOutput = 0;
@@ -96,9 +106,31 @@ final class AiToolCallingService
 
         $lastBatchFingerprint = null;
 
-        $iterationRequest = $driver->buildFirstRequest($request, $definitions);
+        $stockGroundingQuestion = $this->stockGroundingQuestion($request);
+        $stockGroundingActive = $stockGroundingQuestion !== null;
+
+        if ($stockGroundingActive) {
+            $request = new AiRequest(
+                messages: $request->messages,
+                systemInstruction: $request->systemInstruction,
+                tools: $request->tools,
+                model: $request->model,
+                metadata: $request->metadata,
+                openaiPreviousResponseId: $request->openaiPreviousResponseId,
+                openaiToolOutputInput: $request->openaiToolOutputInput,
+                claudeMessages: $request->claudeMessages,
+                ollamaMessages: $request->ollamaMessages,
+                toolChoice: $this->stockCountGrounding->firstHopToolChoice($provider),
+                stockCountGrounding: $request->stockCountGrounding,
+                stockCountGroundingQuestion: $request->stockCountGroundingQuestion,
+                stockCountInheritedProductFilters: $request->stockCountInheritedProductFilters,
+                stockCountRawUserMessage: $request->stockCountRawUserMessage,
+            );
+        }
 
         try {
+            $iterationRequest = $driver->buildFirstRequest($request, $definitions);
+
             while (true) {
                 $response = $this->agentService->complete($iterationRequest);
 
@@ -114,8 +146,20 @@ final class AiToolCallingService
 
                     $incompleteReason = $completed ? null : $this->incompleteReason($response);
 
+                    $finalText = $response->text;
+                    if ($stockGroundingActive && $stockGroundingQuestion !== null) {
+                        $finalText = $this->stockCountGrounding->enforce(
+                            $finalText,
+                            $user,
+                            $stockGroundingQuestion,
+                            $turnRecorder?->traces ?? [],
+                            $request->stockCountInheritedProductFilters,
+                            $request->stockCountRawUserMessage,
+                        );
+                    }
+
                     $outcome = new AiToolCallingOutcome(
-                        text: $response->text,
+                        text: $finalText,
                         provider: $response->provider,
                         model: $response->model,
                         providerResponseId: $response->providerResponseId,
@@ -169,7 +213,7 @@ final class AiToolCallingService
                 $resultsById = [];
 
                 foreach ($response->toolCalls as $call) {
-                    $result = $this->toolExecutor->execute($context, $call);
+                    $result = $this->toolExecutor->execute($context, $call, $provider);
                     $toolCallsExecuted++;
                     $resultsById[$call->id] = $result;
                     $turnRecorder?->add($call, $result);
@@ -199,6 +243,8 @@ final class AiToolCallingService
 
             return $outcome;
         } catch (AiProviderException $exception) {
+            report($exception);
+
             $outcome = $this->failureOutcome(
                 AiSafeText::forProviderException($exception),
                 $aggregatedInput,
@@ -217,6 +263,29 @@ final class AiToolCallingService
                 $startedAt,
                 $exception->errorCode(),
             );
+
+            return $outcome;
+        } catch (Throwable $exception) {
+            $outcome = $this->failureOutcome(
+                'The assistant could not complete this request.',
+                $aggregatedInput,
+                $aggregatedOutput,
+                $aggregatedTotal,
+                $toolIterations,
+                $toolCallsExecuted,
+                AiProviderException::CODE_PROVIDER_ERROR,
+            );
+
+            $this->finalizeConversationRecording(
+                $conversationRecording,
+                $user,
+                $turnRecorder,
+                $outcome,
+                $startedAt,
+                AiProviderException::CODE_PROVIDER_ERROR,
+            );
+
+            report($exception);
 
             return $outcome;
         }
@@ -239,13 +308,21 @@ final class AiToolCallingService
             $provider = 'claude';
         }
 
-        $model = $provider === 'claude'
-            ? (string) config('ai.claude.model', 'claude')
-            : (string) config('ai.openai.model', 'gpt-4o-mini');
+        $model = match ($provider) {
+            'claude' => (string) config('ai.claude.model', 'claude'),
+            'ollama' => (string) config('ai.ollama.model', 'llama3.1:8b'),
+            default => (string) config('ai.openai.model', 'gpt-4o-mini'),
+        };
+
+        $reportedProvider = match ($provider) {
+            'claude' => 'claude',
+            'ollama' => 'ollama',
+            default => 'openai',
+        };
 
         return new AiToolCallingOutcome(
             text: $text,
-            provider: $provider === 'claude' ? 'claude' : 'openai',
+            provider: $reportedProvider,
             model: $model,
             providerResponseId: null,
             inputTokens: $this->nullableInt($aggregatedInput),
@@ -363,5 +440,16 @@ final class AiToolCallingService
     private function nullableInt(int $value): ?int
     {
         return $value > 0 ? $value : null;
+    }
+
+    private function stockGroundingQuestion(AiRequest $request): ?string
+    {
+        if (! $request->stockCountGrounding) {
+            return null;
+        }
+
+        $question = $request->stockCountGroundingQuestion;
+
+        return is_string($question) && trim($question) !== '' ? trim($question) : null;
     }
 }

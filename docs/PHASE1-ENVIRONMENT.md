@@ -55,6 +55,8 @@ Nothing under `C:\xampp\` was modified.
 | `extension_dir` | `"ext"` | Loads DLLs from `tools/php/ext` (relative to the PHP root) |
 | `date.timezone` | `UTC` | Avoids timezone warnings in CLI/Laravel |
 | Development defaults | From `php.ini-development` | `display_errors`, `E_ALL`, etc., suitable for local dev |
+| `max_execution_time` | `600` | 10 minutes for web/CGI (see `stoneerp-overrides.ini`); CLI queue workers stay unlimited |
+| `max_input_time` | `600` | Matches long assistant / upload requests |
 
 ## Extension configuration
 

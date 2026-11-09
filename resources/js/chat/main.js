@@ -2,17 +2,27 @@ import {
     cancelProposal,
     confirmProposal,
     createApiClient,
+    fetchAssistantRun,
     fetchCurrentUser,
     fetchProposal,
     login,
     revokeToken,
     sendAssistantMessage,
 } from './api.js';
+import {
+    AssistantRunPollError,
+    isAsyncAssistantAccepted,
+    pollAssistantRunUntilDone,
+    shouldResumePendingRun,
+} from './assistantPolling.js';
 import { extractProposalIdFromAssistantText } from './parsers.js';
 
 const TOKEN_KEY = 'stoneerp_chat_token';
 const USER_KEY = 'stoneerp_chat_user';
 const CONV_KEY = 'stoneerp_chat_conversation_id';
+const RUN_KEY = 'stoneerp_chat_active_run_id';
+const RUN_USER_KEY = 'stoneerp_chat_active_run_user_id';
+const RUN_MESSAGE_KEY = 'stoneerp_chat_active_run_message';
 
 /** @typedef {{ id: string, kind: 'user'|'assistant'|'system', text: string, isSample?: boolean, assistantPayload?: Record<string, unknown>|null, success?: boolean|null }} ChatMessage */
 
@@ -87,6 +97,42 @@ function clearSession() {
     sessionStorage.removeItem(TOKEN_KEY);
     sessionStorage.removeItem(USER_KEY);
     sessionStorage.removeItem(CONV_KEY);
+    sessionStorage.removeItem(RUN_KEY);
+    sessionStorage.removeItem(RUN_USER_KEY);
+    sessionStorage.removeItem(RUN_MESSAGE_KEY);
+}
+
+function clearPendingRunStorage() {
+    sessionStorage.removeItem(RUN_KEY);
+    sessionStorage.removeItem(RUN_USER_KEY);
+    sessionStorage.removeItem(RUN_MESSAGE_KEY);
+}
+
+/**
+ * @param {string} runId
+ * @param {string} [messageText]
+ */
+function persistPendingRun(runId, messageText) {
+    if (!runId || !state.user?.id) {
+        return;
+    }
+    sessionStorage.setItem(RUN_KEY, runId);
+    sessionStorage.setItem(RUN_USER_KEY, String(state.user.id));
+    if (typeof messageText === 'string' && messageText.trim() !== '') {
+        sessionStorage.setItem(RUN_MESSAGE_KEY, messageText.trim().slice(0, 4000));
+    }
+}
+
+function reconcilePendingRunStorage() {
+    const runId = sessionStorage.getItem(RUN_KEY);
+    if (!runId) {
+        return;
+    }
+    const runUser = sessionStorage.getItem(RUN_USER_KEY);
+    const currentId = state.user?.id != null ? String(state.user.id) : null;
+    if (!shouldResumePendingRun(runUser, currentId, runId)) {
+        clearPendingRunStorage();
+    }
 }
 
 function isPurchasing() {
@@ -139,6 +185,23 @@ function scrollMessagesToEnd() {
     }
 }
 
+/** Return focus to the chat composer after send/render (innerHTML recreates the textarea). */
+function focusMessageInput() {
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            if (state.sending) {
+                return;
+            }
+            const input = document.getElementById('message-input');
+            if (input instanceof HTMLTextAreaElement && !input.disabled) {
+                input.focus({ preventScroll: true });
+                const end = input.value.length;
+                input.setSelectionRange(end, end);
+            }
+        });
+    });
+}
+
 async function handleLoginSubmit(ev) {
     ev.preventDefault();
     state.globalError = null;
@@ -180,11 +243,15 @@ async function handleLoginSubmit(ev) {
         const payload = me.data?.data !== undefined ? me.data.data : me.data;
         state.user = payload;
         persistSession();
+        reconcilePendingRunStorage();
     } catch (e) {
         state.globalError = errorMessageFromAxios(e);
     }
     state.sending = false;
     render();
+    if (state.token && state.user) {
+        focusMessageInput();
+    }
 }
 
 async function handleLogout() {
@@ -207,8 +274,10 @@ function handleNewConversation() {
     state.hintedProposalId = null;
     state.proposalLoadError = null;
     state.pendingSend = null;
+    clearPendingRunStorage();
     persistSession();
     render();
+    focusMessageInput();
 }
 
 /**
@@ -223,7 +292,7 @@ function sanitizeAssistantDisplay(text) {
  * @param {string} messageText
  * @param {string} idemKey
  */
-async function handleAssistantResponse(res, messageText, idemKey) {
+async function finalizeAssistantTurn(res, messageText, idemKey) {
     const data = assistantDataFromResponse(res.data);
 
     if (res.status === 503 && res.data?.error?.code === 'idempotency_in_progress') {
@@ -234,7 +303,7 @@ async function handleAssistantResponse(res, messageText, idemKey) {
             { message: messageText, ...(state.conversationId ? { conversation_id: state.conversationId } : {}) },
             state.conversationId ? idemKey : null,
         );
-        return handleAssistantResponse(retry, messageText, idemKey);
+        return finalizeAssistantTurn(retry, messageText, idemKey);
     }
 
     if (res.status === 200 && data && typeof data.conversation_id === 'string') {
@@ -278,11 +347,213 @@ async function handleAssistantResponse(res, messageText, idemKey) {
     }
 
     if (isPurchasing()) {
-        const hint = extractProposalIdFromAssistantText(assistantText);
-        state.hintedProposalId = hint;
+        const structuredProposal = data?.purchase_order_proposal;
+        const structuredId =
+            structuredProposal && typeof structuredProposal === 'object' && structuredProposal.proposal_id
+                ? String(structuredProposal.proposal_id)
+                : null;
+        if (structuredId) {
+            state.hintedProposalId = structuredId;
+            void handleLoadProposal(structuredId);
+        } else {
+            const hint = extractProposalIdFromAssistantText(assistantText);
+            state.hintedProposalId = hint;
+        }
     }
 
     state.pendingSend = null;
+    clearPendingRunStorage();
+}
+
+/**
+ * @param {string} pendingId
+ * @param {unknown} terminalData
+ */
+function applyTerminalAsyncRun(pendingId, terminalData) {
+    const idx = state.messages.findIndex((m) => m.id === pendingId);
+    const answer =
+        terminalData && typeof terminalData === 'object' && 'answer' in terminalData
+            ? String(terminalData.answer ?? '')
+            : '';
+    const failed =
+        terminalData &&
+        typeof terminalData === 'object' &&
+        'status' in terminalData &&
+        terminalData.status === 'failed';
+    const errMsg =
+        failed && terminalData.error && typeof terminalData.error === 'object'
+            ? String(terminalData.error.message ?? 'Request failed.')
+            : failed
+              ? 'Request failed.'
+              : '';
+
+    if (idx >= 0) {
+        state.messages[idx] = {
+            ...state.messages[idx],
+            text: failed ? errMsg : sanitizeAssistantDisplay(answer),
+            success: !failed,
+            assistantPayload: terminalData ?? null,
+        };
+    } else if (!failed) {
+        state.messages.push({
+            id: crypto.randomUUID(),
+            kind: 'assistant',
+            text: sanitizeAssistantDisplay(answer),
+            success: true,
+            assistantPayload: terminalData ?? null,
+        });
+    }
+
+    if (failed) {
+        state.messages.push({
+            id: crypto.randomUUID(),
+            kind: 'system',
+            text: errMsg,
+        });
+    }
+
+    if (isPurchasing() && !failed) {
+        state.hintedProposalId = extractProposalIdFromAssistantText(answer);
+    }
+}
+
+/**
+ * @param {string} runId
+ * @param {string} pendingId
+ */
+async function pollAsyncRunToTerminal(runId, pendingId) {
+    const client = createApiClient(state.token);
+    try {
+        const { terminalData } = await pollAssistantRunUntilDone(
+            async (id) => {
+                const pollRes = await fetchAssistantRun(client, id);
+                return { status: pollRes.status, data: pollRes.data };
+            },
+            runId,
+            {
+                onStatus: (status) => {
+                    const idx = state.messages.findIndex((m) => m.id === pendingId);
+                    if (idx >= 0 && (status === 'queued' || status === 'processing')) {
+                        state.messages[idx] = {
+                            ...state.messages[idx],
+                            assistantPayload: {
+                                ...(state.messages[idx].assistantPayload ?? {}),
+                                async: true,
+                                status,
+                                run_id: runId,
+                            },
+                        };
+                    }
+                },
+            },
+        );
+        applyTerminalAsyncRun(pendingId, terminalData);
+    } catch (e) {
+        if (e instanceof AssistantRunPollError && e.code === 'unauthenticated') {
+            clearPendingRunStorage();
+            clearSession();
+            state.globalError = e.message;
+            state.pendingSend = null;
+            state.sending = false;
+            render();
+            return;
+        }
+
+        const idx = state.messages.findIndex((m) => m.id === pendingId);
+        const errText =
+            e instanceof AssistantRunPollError ? e.message : errorMessageFromAxios(e);
+        if (idx >= 0) {
+            state.messages[idx] = {
+                ...state.messages[idx],
+                text: errText,
+                success: false,
+            };
+        }
+        state.messages.push({
+            id: crypto.randomUUID(),
+            kind: 'system',
+            text: errText,
+        });
+    }
+
+    state.pendingSend = null;
+    clearPendingRunStorage();
+    state.sending = false;
+    render();
+    scrollMessagesToEnd();
+    focusMessageInput();
+}
+
+async function tryResumePendingAsyncRun() {
+    if (!state.token || !state.user) {
+        return;
+    }
+    reconcilePendingRunStorage();
+    const runId = sessionStorage.getItem(RUN_KEY);
+    const runUser = sessionStorage.getItem(RUN_USER_KEY);
+    if (!shouldResumePendingRun(runUser, state.user.id, runId)) {
+        return;
+    }
+    if (state.sending) {
+        return;
+    }
+
+    state.sending = true;
+    const pendingMessage = sessionStorage.getItem(RUN_MESSAGE_KEY);
+    if (pendingMessage) {
+        state.messages.push({
+            id: crypto.randomUUID(),
+            kind: 'user',
+            text: pendingMessage,
+        });
+    }
+    const pendingId = crypto.randomUUID();
+    state.messages.push({
+        id: pendingId,
+        kind: 'assistant',
+        text: 'Resuming your pending request…',
+        success: null,
+        assistantPayload: { async: true, status: 'processing', run_id: runId },
+    });
+    render();
+    scrollMessagesToEnd();
+
+    await pollAsyncRunToTerminal(runId ?? '', pendingId);
+}
+
+/**
+ * @param {import('axios').AxiosResponse} res
+ * @param {string} messageText
+ * @param {string} idemKey
+ */
+async function handleAssistantResponse(res, messageText, idemKey) {
+    if (isAsyncAssistantAccepted(res.status, res.data)) {
+        const data = assistantDataFromResponse(res.data);
+        const runId = data && typeof data.run_id === 'string' ? data.run_id : null;
+        if (runId) {
+            persistPendingRun(runId, messageText);
+        }
+        if (data && typeof data.conversation_id === 'string') {
+            state.conversationId = data.conversation_id;
+            persistSession();
+        }
+
+        const pendingId = crypto.randomUUID();
+        state.messages.push({
+            id: pendingId,
+            kind: 'assistant',
+            text: 'Processing your request…',
+            success: null,
+            assistantPayload: { async: true, status: data?.status ?? 'queued', run_id: runId },
+        });
+        render();
+        scrollMessagesToEnd();
+
+        await pollAsyncRunToTerminal(runId ?? '', pendingId);
+        return;
+    }
+
+    await finalizeAssistantTurn(res, messageText, idemKey);
 }
 
 async function handleSend(ev) {
@@ -349,6 +620,7 @@ async function handleSend(ev) {
     state.sending = false;
     render();
     scrollMessagesToEnd();
+    focusMessageInput();
 }
 
 function handleInsertSampleDemo() {
@@ -574,8 +846,8 @@ function layoutChat() {
     const proposalPanel = isPurchasing() ? proposalSidebarHtml() : '';
 
     return `
-<div class="min-h-screen flex flex-col items-center py-4 px-2 sm:py-6 sm:px-4">
-  <div class="w-[min(92vw,1280px)] max-w-[1280px] h-[min(76vh,820px)] flex flex-col rounded-2xl border border-slate-200/90 bg-white shadow-lg overflow-hidden">
+<div class="h-screen flex flex-col items-center px-2 sm:px-4 min-h-0">
+  <div class="w-[min(92vw,1280px)] max-w-[1280px] flex-1 min-h-0 flex flex-col rounded-2xl border border-slate-200/90 bg-white shadow-lg overflow-hidden">
     <header class="shrink-0 flex flex-wrap items-center gap-2 justify-between px-4 py-3 bg-[#1e3a5f] text-white">
       <div class="flex items-center gap-2 min-w-0">
         <h1 class="text-base sm:text-lg font-semibold truncate">Slab Inventory Assistant</h1>
@@ -612,7 +884,7 @@ function layoutChat() {
       ${proposalPanel}
     </div>
   </div>
-  ${state.conversationId ? `<p class="mt-2 text-[10px] text-slate-400 font-mono truncate max-w-[min(92vw,1280px)]">Conversation: ${escapeHtml(state.conversationId)}</p>` : ''}
+  ${state.conversationId ? `<p class="shrink-0 py-1 text-[10px] text-slate-400 font-mono truncate max-w-[min(92vw,1280px)]">Conversation: ${escapeHtml(state.conversationId)}</p>` : ''}
 </div>`;
 }
 
@@ -625,8 +897,8 @@ function emptyStateHtml() {
 
 function loadingBubbleHtml() {
     return `<div class="flex justify-start">
-      <div class="max-w-[85%] rounded-2xl rounded-bl-md bg-white border border-slate-200 px-4 py-3 text-sm text-slate-500 shadow-sm">
-        <span class="inline-block animate-pulse">Assistant is thinking…</span>
+      <div class="max-w-[85%] w-fit rounded-2xl rounded-bl-md bg-white border border-slate-200 px-3.5 py-2 text-sm text-slate-500 shadow-sm">
+        <span class="inline-block animate-pulse leading-snug">Assistant is thinking…</span>
       </div>
     </div>`;
 }
@@ -641,9 +913,11 @@ function bubbleHtml(m) {
 
     if (m.kind === 'user') {
         return `<div class="flex justify-end">
-          <div class="max-w-[85%] rounded-2xl rounded-br-md bg-[#1e3a5f] text-white px-4 py-2.5 text-sm shadow-sm whitespace-pre-wrap">
-            <span class="text-[10px] uppercase tracking-wide opacity-70">You</span>${sampleTag}
-            <div class="mt-1">${escapeHtml(m.text)}</div>
+          <div class="max-w-[85%] w-fit rounded-2xl rounded-br-md bg-[#1e3a5f] text-white px-3.5 py-2 text-sm shadow-sm border border-[#1a3352]/40">
+            <div class="flex flex-col gap-0.5">
+              <div class="flex items-center gap-1.5 flex-wrap leading-none"><span class="text-[10px] uppercase tracking-wide opacity-75">You</span>${sampleTag}</div>
+              <p class="m-0 leading-snug whitespace-pre-wrap">${escapeHtml(m.text)}</p>
+            </div>
           </div>
         </div>`;
     }
@@ -660,14 +934,16 @@ function bubbleHtml(m) {
     const meta = m.assistantPayload && state.showDetails ? assistantMetaHtml(m.assistantPayload) : '';
 
     return `<div class="flex justify-start">
-      <div class="max-w-[85%] rounded-2xl rounded-bl-md bg-white ${border} px-4 py-2.5 text-sm text-slate-800 shadow-sm whitespace-pre-wrap">
-        <div class="flex items-center gap-2 flex-wrap">
-          <span class="text-[10px] uppercase tracking-wide font-medium text-slate-500">Assistant</span>
-          ${sampleTag}
-          ${ok ? '' : '<span class="text-[10px] font-semibold text-red-700">Incomplete or error</span>'}
+      <div class="max-w-[85%] w-fit rounded-2xl rounded-bl-md bg-white border ${border} px-3.5 py-2 text-sm text-slate-800 shadow-sm">
+        <div class="flex flex-col gap-0.5">
+          <div class="flex items-center gap-1.5 flex-wrap leading-none">
+            <span class="text-[10px] uppercase tracking-wide font-medium text-slate-500">Assistant</span>
+            ${sampleTag}
+            ${ok ? '' : '<span class="text-[10px] font-semibold text-red-700">Incomplete or error</span>'}
+          </div>
+          <p class="m-0 leading-snug whitespace-pre-wrap">${escapeHtml(m.text)}</p>
+          ${meta}
         </div>
-        <div class="mt-1">${escapeHtml(m.text)}</div>
-        ${meta}
       </div>
     </div>`;
 }
@@ -683,7 +959,7 @@ function assistantMetaHtml(data) {
     const ti = data.tool_iterations ?? '—';
     const tok = u && 'total_tokens' in u ? u.total_tokens : '—';
 
-    return `<details class="mt-2 text-[10px] text-slate-500 border-t border-slate-100 pt-2">
+    return `<details class="mt-1.5 text-[10px] text-slate-500 border-t border-slate-100 pt-1.5">
       <summary class="cursor-pointer select-none font-medium text-slate-600">Technical details</summary>
       <dl class="mt-1 grid grid-cols-2 gap-x-2 gap-y-0.5">
         <dt>Provider</dt><dd>${escapeHtml(String(prov))}</dd>
@@ -719,7 +995,7 @@ function proposalSidebarHtml() {
             <div class="overflow-x-auto max-h-40 border border-slate-200 rounded-lg">
               <table class="w-full text-[11px]">
                 <thead class="bg-slate-100 text-slate-600"><tr>
-                  <th class="text-left px-2 py-1">SKU</th><th class="text-left px-2 py-1">Qty</th>
+                  <th class="text-left px-2 py-1">SKU</th><th class="text-left px-2 py-1">Dest.</th><th class="text-left px-2 py-1">Qty</th>
                   ${showCosts ? '<th class="text-right px-2 py-1">Unit</th>' : ''}
                 </tr></thead>
                 <tbody>
@@ -728,6 +1004,7 @@ function proposalSidebarHtml() {
                           (line) => `
                     <tr class="border-t border-slate-100">
                       <td class="px-2 py-1">${escapeHtml(String(line.product_sku ?? ''))}</td>
+                      <td class="px-2 py-1">${escapeHtml(String(line.warehouse_name ?? line.warehouse_id ?? ''))}</td>
                       <td class="px-2 py-1">${escapeHtml(String(line.quantity ?? ''))}</td>
                       ${showCosts ? `<td class="px-2 py-1 text-right">${escapeHtml(String(line.unit_cost ?? ''))}</td>` : ''}
                     </tr>`,
@@ -783,4 +1060,9 @@ function escapeHtml(s) {
 }
 
 loadSession();
+reconcilePendingRunStorage();
 render();
+if (state.token && state.user) {
+    focusMessageInput();
+}
+void tryResumePendingAsyncRun();

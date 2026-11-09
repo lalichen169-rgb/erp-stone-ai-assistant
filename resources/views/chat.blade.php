@@ -19,7 +19,7 @@
     @if (! file_exists(public_path('build/manifest.json')) && ! file_exists(public_path('hot')))
         <p><strong>Assets not built.</strong> Run <code>npm install</code> then <code>npm run dev</code> or <code>npm run build</code>, then reload.</p>
     @else
-        <div id="app" class="min-h-screen"></div>
+        <div id="app" class="h-screen min-h-0"></div>
     @endif
 </body>
 </html>

@@ -549,13 +549,14 @@ class AiToolCallingServiceTest extends TestCase
 
         $product = $this->createCalacattaThreeCmDemoProduct();
         $supplier = $this->createSupplierWithName('PropCtx');
+        $warehouseId = $this->createHoustonDallasAustinWarehouses()['houston']->id;
 
         $args = json_encode([
             'supplier_id' => $supplier->id,
             'order_date' => '2026-11-06',
             'freight_cost' => '10.00',
             'lines' => [
-                ['product_id' => $product->id, 'quantity' => 1, 'unit_cost' => '20.00'],
+                ['product_id' => $product->id, 'warehouse_id' => $warehouseId, 'quantity' => 1, 'unit_cost' => '20.00'],
             ],
         ], JSON_THROW_ON_ERROR);
 
@@ -592,6 +593,7 @@ class AiToolCallingServiceTest extends TestCase
 
         $product = $this->createCalacattaThreeCmDemoProduct();
         $supplier = $this->createSupplierWithName('PropOverride');
+        $warehouseId = $this->createHoustonDallasAustinWarehouses()['houston']->id;
 
         $args = json_encode([
             'supplier_id' => $supplier->id,
@@ -600,7 +602,7 @@ class AiToolCallingServiceTest extends TestCase
             'conversation_key' => 'hacker',
             'idempotency_key' => 'bad',
             'lines' => [
-                ['product_id' => $product->id, 'quantity' => 1, 'unit_cost' => '20.00'],
+                ['product_id' => $product->id, 'warehouse_id' => $warehouseId, 'quantity' => 1, 'unit_cost' => '20.00'],
             ],
         ], JSON_THROW_ON_ERROR);
 
@@ -635,5 +637,228 @@ class AiToolCallingServiceTest extends TestCase
         );
 
         $this->assertSame('Blocked.', $outcome->text);
+    }
+
+    public function test_ollama_tool_then_text_and_ordering(): void
+    {
+        Config::set('ai.provider', 'ollama');
+        Config::set('ai.ollama.base_url', 'http://ollama.test');
+        Config::set('ai.ollama.model', 'llama3.1:8b');
+
+        $this->seedCalacattaStockScenario();
+
+        Http::fake([
+            'http://ollama.test/api/chat' => Http::sequence()
+                ->push([
+                    'model' => 'llama3.1:8b',
+                    'prompt_eval_count' => 5,
+                    'eval_count' => 4,
+                    'message' => [
+                        'role' => 'assistant',
+                        'content' => '',
+                        'tool_calls' => [
+                            [
+                                'id' => 'call_stock_1',
+                                'function' => [
+                                    'name' => 'checkStock',
+                                    'arguments' => [
+                                        'material' => 'Quartz',
+                                        'color' => 'Calacatta',
+                                        'thickness_cm' => '3.00',
+                                        'warehouse_name' => 'Houston',
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ], 200)
+                ->push([
+                    'model' => 'llama3.1:8b',
+                    'prompt_eval_count' => 10,
+                    'eval_count' => 6,
+                    'message' => [
+                        'role' => 'assistant',
+                        'content' => '42 slabs available.',
+                    ],
+                ], 200),
+        ]);
+
+        $outcome = app(AiToolCallingService::class)->run(
+            new AiRequest(messages: [AiMessage::user('Stock in Houston?')]),
+            $this->createSalesApiUser(),
+        );
+
+        $this->assertStringContainsString('42', $outcome->text);
+        $this->assertSame(1, $outcome->toolIterations);
+        $this->assertSame(1, $outcome->toolCallsExecuted);
+        $this->assertSame(15, $outcome->inputTokens);
+        $this->assertSame(10, $outcome->outputTokens);
+
+        Http::assertSent(function ($request) {
+            if ($request->url() !== 'http://ollama.test/api/chat') {
+                return false;
+            }
+
+            $data = $request->data();
+            $messages = $data['messages'] ?? [];
+
+            foreach ($messages as $message) {
+                if (($message['role'] ?? '') === 'tool'
+                    && ($message['tool_call_id'] ?? '') === 'call_stock_1') {
+                    return true;
+                }
+            }
+
+            return false;
+        });
+    }
+
+    public function test_ollama_sales_denied_landed_cost_surfaces_permission_error(): void
+    {
+        Config::set('ai.provider', 'ollama');
+        Config::set('ai.ollama.base_url', 'http://ollama.test');
+        Config::set('ai.ollama.model', 'llama3.1:8b');
+
+        $supplier = $this->createSupplierWithName('Ollama LC Deny');
+        $product = $this->createCalacattaThreeCmDemoProduct();
+        $order = $this->createPurchaseOrderWithLines(
+            $supplier,
+            \App\Enums\PurchaseOrderStatus::Ordered,
+            '2026-11-01',
+            null,
+            '100.00',
+            [['product' => $product, 'quantity' => 1, 'unit_cost' => '50.00']]
+        );
+
+        Http::fake([
+            'http://ollama.test/api/chat' => Http::sequence()
+                ->push([
+                    'model' => 'llama3.1:8b',
+                    'message' => [
+                        'role' => 'assistant',
+                        'content' => '',
+                        'tool_calls' => [
+                            [
+                                'id' => 'lc_ollama',
+                                'function' => [
+                                    'name' => 'getLandedCost',
+                                    'arguments' => ['purchase_order_id' => $order->id],
+                                ],
+                            ],
+                        ],
+                    ],
+                ], 200)
+                ->push([
+                    'model' => 'llama3.1:8b',
+                    'message' => [
+                        'role' => 'assistant',
+                        'content' => 'Not permitted for your role.',
+                    ],
+                ], 200),
+        ]);
+
+        $outcome = app(AiToolCallingService::class)->run(
+            new AiRequest(messages: [AiMessage::user('Landed cost please')]),
+            $this->createSalesApiUser(),
+        );
+
+        $this->assertStringContainsString('Not permitted', $outcome->text);
+        $this->assertSame(1, $outcome->toolCallsExecuted);
+    }
+
+    public function test_ollama_builds_history_when_request_includes_prior_tool_messages(): void
+    {
+        Config::set('ai.provider', 'ollama');
+        Config::set('ai.ollama.base_url', 'http://ollama.test');
+        Config::set('ai.ollama.model', 'llama3.1:8b');
+
+        $this->seedCalacattaStockScenario();
+
+        Http::fake([
+            'http://ollama.test/api/chat' => Http::response([
+                'model' => 'llama3.1:8b',
+                'message' => [
+                    'role' => 'assistant',
+                    'content' => '',
+                    'tool_calls' => [
+                        [
+                            'id' => 'dallas_call',
+                            'function' => [
+                                'name' => 'checkStock',
+                                'arguments' => [
+                                    'material' => 'Quartz',
+                                    'color' => 'Calacatta',
+                                    'thickness_cm' => '3.00',
+                                    'warehouse_name' => 'Dallas',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $history = [
+            AiMessage::user('How many 3cm Calacatta slabs do we have in Houston?'),
+            AiMessage::toolResult('houston_call', [
+                'success' => true,
+                'data' => ['slabs_on_hand' => 42],
+            ], 'checkStock', ['warehouse_name' => 'Houston']),
+            AiMessage::assistant('42 in Houston.'),
+            AiMessage::user('And in Dallas?'),
+        ];
+
+        app(AiToolCallingService::class)->run(
+            new AiRequest(messages: $history),
+            $this->createSalesApiUser(),
+        );
+
+        Http::assertSent(function ($request): bool {
+            if ($request->url() !== 'http://ollama.test/api/chat') {
+                return false;
+            }
+
+            $messages = $request->data()['messages'] ?? [];
+            $hasHistoricalTool = false;
+            $hasHistoricalAssistantCalls = false;
+            $hasDallasUser = false;
+
+            foreach ($messages as $message) {
+                if (($message['role'] ?? '') === 'tool' && ($message['tool_call_id'] ?? '') === 'houston_call') {
+                    $hasHistoricalTool = true;
+                }
+                if (($message['role'] ?? '') === 'assistant' && isset($message['tool_calls'])) {
+                    $hasHistoricalAssistantCalls = true;
+                }
+                if (($message['role'] ?? '') === 'user' && ($message['content'] ?? '') === 'And in Dallas?') {
+                    $hasDallasUser = true;
+                }
+            }
+
+            return $hasHistoricalTool && $hasHistoricalAssistantCalls && $hasDallasUser;
+        });
+    }
+
+    public function test_ollama_failure_outcome_reports_configured_ollama_provider_and_model(): void
+    {
+        Config::set('ai.provider', 'ollama');
+        Config::set('ai.ollama.base_url', 'http://ollama.test');
+        Config::set('ai.ollama.model', 'llama3.1:8b');
+
+        Http::fake([
+            'http://ollama.test/api/chat' => function (): void {
+                throw new \Illuminate\Http\Client\ConnectionException('Connection timed out');
+            },
+        ]);
+
+        $outcome = app(AiToolCallingService::class)->run(
+            new AiRequest(messages: [AiMessage::user('Hello')]),
+            $this->createSalesApiUser(),
+        );
+
+        $this->assertFalse($outcome->completed);
+        $this->assertSame('ollama', $outcome->provider);
+        $this->assertSame('llama3.1:8b', $outcome->model);
+        $this->assertSame('timeout', $outcome->errorCode);
     }
 }

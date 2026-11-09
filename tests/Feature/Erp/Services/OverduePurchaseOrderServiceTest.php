@@ -123,4 +123,33 @@ class OverduePurchaseOrderServiceTest extends TestCase
         $this->assertNotContains($draftPast->id, $ids);
         $this->assertSame(36, $list[0]['days_overdue']);
     }
+
+    public function test_supplier_filter_limits_results(): void
+    {
+        $supplierA = $this->createSupplierWithName('Filter Supplier A');
+        $supplierB = $this->createSupplierWithName('Filter Supplier B');
+        $today = Carbon::parse('2026-11-06');
+
+        $orderA = $this->createPurchaseOrderWithLines(
+            $supplierA,
+            PurchaseOrderStatus::Ordered,
+            '2026-09-01',
+            '2026-10-01',
+            '0.00',
+            [['product' => $this->product, 'quantity' => 1, 'unit_cost' => '10.00']],
+        );
+
+        $this->createPurchaseOrderWithLines(
+            $supplierB,
+            PurchaseOrderStatus::Ordered,
+            '2026-09-01',
+            '2026-10-01',
+            '0.00',
+            [['product' => $this->product, 'quantity' => 1, 'unit_cost' => '10.00']],
+        );
+
+        $scoped = $this->service->listOverdue($this->salesUser, $today, 100, $supplierA->id);
+        $this->assertCount(1, $scoped);
+        $this->assertSame($orderA->id, $scoped[0]['purchase_order_id']);
+    }
 }

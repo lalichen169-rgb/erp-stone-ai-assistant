@@ -31,6 +31,7 @@ class CreatePurchaseOrderProposalRequest extends FormRequest
             'freight_cost' => ['required', 'numeric', 'min:0'],
             'lines' => ['required', 'array', 'min:1', 'max:50'],
             'lines.*.product_id' => ['required', 'integer', 'min:1', 'exists:products,id'],
+            'lines.*.warehouse_id' => ['required', 'integer', 'min:1', 'exists:warehouses,id'],
             'lines.*.quantity' => ['required', 'integer', 'min:1'],
             'lines.*.unit_cost' => ['required', 'numeric', 'min:0'],
         ];
@@ -81,6 +82,7 @@ class CreatePurchaseOrderProposalRequest extends FormRequest
             'lines' => array_map(
                 fn (array $line): array => [
                     'product_id' => (int) $line['product_id'],
+                    'warehouse_id' => (int) $line['warehouse_id'],
                     'quantity' => (int) $line['quantity'],
                     'unit_cost' => $line['unit_cost'],
                 ],

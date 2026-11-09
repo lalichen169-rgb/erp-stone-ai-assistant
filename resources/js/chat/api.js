@@ -66,6 +66,14 @@ export async function sendAssistantMessage(client, body, idempotencyKey) {
 
 /**
  * @param {import('axios').AxiosInstance} client
+ * @param {string} runId
+ */
+export async function fetchAssistantRun(client, runId) {
+    return client.get(`/api/assistant/runs/${encodeURIComponent(runId)}`);
+}
+
+/**
+ * @param {import('axios').AxiosInstance} client
  * @param {string} proposalId
  * @param {string} conversationKey
  */

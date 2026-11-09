@@ -13,6 +13,7 @@ class PurchaseOrderLine extends Model
     protected $fillable = [
         'purchase_order_id',
         'product_id',
+        'warehouse_id',
         'quantity',
         'unit_cost',
     ];
@@ -42,5 +43,13 @@ class PurchaseOrderLine extends Model
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);
+    }
+
+    /**
+     * @return BelongsTo<Warehouse, $this>
+     */
+    public function warehouse(): BelongsTo
+    {
+        return $this->belongsTo(Warehouse::class);
     }
 }

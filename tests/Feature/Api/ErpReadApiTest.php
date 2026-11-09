@@ -195,4 +195,83 @@ class ErpReadApiTest extends TestCase
 
         $this->getJson('/api/purchase-orders/999999/landed-cost')->assertNotFound();
     }
+
+    public function test_sales_can_retrieve_purchase_order_by_id_without_cost_fields(): void
+    {
+        $supplier = $this->createSupplierWithName('Direct Id Supplier');
+        $product = Product::query()->create([
+            'sku' => 'API-PO-ID',
+            'name' => 'Direct Id Product',
+            'material' => 'Granite',
+            'color' => 'Black',
+            'thickness_cm' => '3.00',
+            'slab_size' => '300x180',
+        ]);
+
+        $order = $this->createPurchaseOrderWithLines(
+            $supplier,
+            PurchaseOrderStatus::Received,
+            '2026-05-15',
+            '2026-06-30',
+            '1100.00',
+            [['product' => $product, 'quantity' => 18, 'unit_cost' => '295.00']]
+        );
+
+        $this->actingAsSanctum($this->createSalesApiUser());
+
+        $response = $this->getJson('/api/purchase-orders?purchase_order_id='.$order->id)
+            ->assertOk();
+
+        $response->assertJsonPath('meta.total', 1);
+        $response->assertJsonPath('data.0.purchase_order_id', $order->id);
+        $response->assertJsonPath('data.0.status', 'received');
+
+        $encoded = json_encode($response->json());
+        $this->assertIsString($encoded);
+        $this->assertStringNotContainsString('unit_cost', $encoded);
+        $this->assertStringNotContainsString('freight_cost', $encoded);
+        $this->assertStringNotContainsString('295', $encoded);
+    }
+
+    public function test_purchasing_can_retrieve_purchase_order_by_id_and_landed_cost(): void
+    {
+        $supplier = $this->createSupplierWithName('Purchasing Id Supplier');
+        $product = Product::query()->create([
+            'sku' => 'API-PO-PUR',
+            'name' => 'Purchasing Id Product',
+            'material' => 'Granite',
+            'color' => 'Black',
+            'thickness_cm' => '3.00',
+            'slab_size' => '300x180',
+        ]);
+
+        $order = $this->createPurchaseOrderWithLines(
+            $supplier,
+            PurchaseOrderStatus::Received,
+            '2026-05-15',
+            '2026-06-30',
+            '1100.00',
+            [['product' => $product, 'quantity' => 18, 'unit_cost' => '295.00']]
+        );
+
+        $this->actingAsSanctum($this->createPurchasingApiUser());
+
+        $this->getJson('/api/purchase-orders?purchase_order_id='.$order->id)
+            ->assertOk()
+            ->assertJsonPath('data.0.status', 'received');
+
+        $this->getJson('/api/purchase-orders/'.$order->id.'/landed-cost')
+            ->assertOk()
+            ->assertJsonPath('data.purchase_order_id', $order->id);
+    }
+
+    public function test_purchase_order_id_filter_returns_empty_when_not_found(): void
+    {
+        $this->actingAsSanctum($this->createSalesApiUser());
+
+        $this->getJson('/api/purchase-orders?purchase_order_id=999999')
+            ->assertOk()
+            ->assertJsonPath('meta.total', 0)
+            ->assertJsonPath('data', []);
+    }
 }

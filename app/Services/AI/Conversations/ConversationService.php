@@ -228,12 +228,12 @@ final class ConversationService
             return;
         }
 
-        DB::transaction(function () use ($recorder): void {
+        DB::transaction(function () use ($recorder, $user): void {
             $order = 0;
             foreach ($recorder->traces as $trace) {
                 $order++;
                 $call = $trace['call'];
-                $result = $this->redactor->redactExecutionResult($trace['result']);
+                $result = $this->redactor->redactExecutionResult($trace['result'], $user);
 
                 $toolMsg = ConversationMessage::query()->create([
                     'conversation_id' => $recorder->conversation->id,

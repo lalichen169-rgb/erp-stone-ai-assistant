@@ -21,6 +21,13 @@ class DraftPurchaseOrderService
 {
     use AuthorizesErpUser;
 
+    private ProcurementProposalValidator $procurementValidator;
+
+    public function __construct(?ProcurementProposalValidator $procurementValidator = null)
+    {
+        $this->procurementValidator = $procurementValidator ?? app(ProcurementProposalValidator::class);
+    }
+
     /**
      * @param  array{
      *     supplier_id: int,
@@ -156,6 +163,9 @@ class DraftPurchaseOrderService
 
             $payload = $proposal->payload;
 
+            $this->procurementValidator->revalidatePayloadOnConfirm($payload);
+            $this->procurementValidator->revalidateWarehousesOnConfirm($payload);
+
             $order = PurchaseOrder::query()->create([
                 'supplier_id' => $payload['supplier_id'],
                 'status' => PurchaseOrderStatus::Draft,
@@ -168,6 +178,7 @@ class DraftPurchaseOrderService
                 PurchaseOrderLine::query()->create([
                     'purchase_order_id' => $order->id,
                     'product_id' => $line['product_id'],
+                    'warehouse_id' => array_key_exists('warehouse_id', $line) ? $line['warehouse_id'] : null,
                     'quantity' => $line['quantity'],
                     'unit_cost' => $line['unit_cost'],
                 ]);
@@ -282,11 +293,7 @@ class DraftPurchaseOrderService
             }
         }
 
-        $freightCost = ErpMoney::formatCurrency(ErpMoney::fromDecimal($input['freight_cost'] ?? '0'));
-
-        if (ErpMoney::compare($freightCost, '0') < 0) {
-            throw new PurchaseOrderProposalException('Freight cost cannot be negative.');
-        }
+        $freightCost = $this->procurementValidator->validateFreight($input['freight_cost'] ?? '0');
 
         $linesInput = $input['lines'] ?? [];
 
@@ -303,18 +310,10 @@ class DraftPurchaseOrderService
 
             $productId = (int) ($line['product_id'] ?? 0);
             $quantity = (int) ($line['quantity'] ?? 0);
-            $unitCost = ErpMoney::formatCurrency(ErpMoney::fromDecimal($line['unit_cost'] ?? '0'));
+            $unitCostInput = $line['unit_cost'] ?? '0';
 
             if ($productId <= 0) {
                 throw new PurchaseOrderProposalException('Each line requires a valid product.');
-            }
-
-            if ($quantity <= 0) {
-                throw new PurchaseOrderProposalException('Line quantity must be a positive integer.');
-            }
-
-            if (ErpMoney::compare($unitCost, '0') < 0) {
-                throw new PurchaseOrderProposalException('Line unit cost cannot be negative.');
             }
 
             $product = Product::query()->find($productId);
@@ -323,14 +322,35 @@ class DraftPurchaseOrderService
                 throw new PurchaseOrderProposalException('Product not found.');
             }
 
+            $warehouseId = array_key_exists('warehouse_id', $line) && $line['warehouse_id'] !== null && $line['warehouse_id'] !== ''
+                ? (int) $line['warehouse_id']
+                : null;
+
+            $pricing = $this->procurementValidator->validateLine(
+                $supplier,
+                $product,
+                $quantity,
+                $unitCostInput,
+                $warehouseId,
+            );
+
+            $unitCost = $pricing['unit_cost'];
             $lineTotal = ErpMoney::roundCurrency(ErpMoney::mul((string) $quantity, $unitCost));
 
             $lines[] = [
                 'product_id' => $product->id,
                 'product_sku' => $product->sku,
                 'product_name' => $product->name,
+                'product_material' => $product->material,
+                'product_color' => $product->color,
+                'product_thickness_cm' => (string) $product->thickness_cm,
+                'warehouse_id' => $pricing['warehouse_id'],
+                'warehouse_name' => $pricing['warehouse_name'],
+                'warehouse_city' => $pricing['warehouse_city'],
                 'quantity' => $quantity,
                 'unit_cost' => $unitCost,
+                'unit_cost_source' => $pricing['unit_cost_source'],
+                'supplier_product_id' => $pricing['supplier_product_id'],
                 'line_total' => $lineTotal,
             ];
         }
@@ -378,6 +398,14 @@ class DraftPurchaseOrderService
                 'product_name' => (string) $line['product_name'],
                 'quantity' => (int) $line['quantity'],
                 'unit_cost' => ErpMoney::formatCurrency(ErpMoney::fromDecimal($line['unit_cost'])),
+                'unit_cost_source' => (string) ($line['unit_cost_source'] ?? 'proposal_manual'),
+                'supplier_product_id' => array_key_exists('supplier_product_id', $line)
+                    ? ($line['supplier_product_id'] !== null ? (int) $line['supplier_product_id'] : null)
+                    : null,
+                'warehouse_id' => array_key_exists('warehouse_id', $line) && $line['warehouse_id'] !== null
+                    ? (int) $line['warehouse_id']
+                    : null,
+                'warehouse_name' => array_key_exists('warehouse_name', $line) ? (string) $line['warehouse_name'] : null,
                 'line_total' => ErpMoney::formatCurrency(ErpMoney::fromDecimal($line['line_total'])),
             ];
         }, $payload['lines']);

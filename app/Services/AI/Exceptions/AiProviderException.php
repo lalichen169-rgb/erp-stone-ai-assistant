@@ -27,6 +27,9 @@ class AiProviderException extends RuntimeException
         private readonly string $errorCode = self::CODE_PROVIDER_ERROR,
         private readonly ?int $httpStatus = null,
         ?\Throwable $previous = null,
+        private readonly ?string $providerErrorType = null,
+        private readonly string|int|null $providerErrorCode = null,
+        private readonly ?string $requestId = null,
     ) {
         parent::__construct($message, 0, $previous);
     }
@@ -39,5 +42,20 @@ class AiProviderException extends RuntimeException
     public function httpStatus(): ?int
     {
         return $this->httpStatus;
+    }
+
+    public function providerErrorType(): ?string
+    {
+        return $this->providerErrorType;
+    }
+
+    public function providerErrorCode(): string|int|null
+    {
+        return $this->providerErrorCode;
+    }
+
+    public function requestId(): ?string
+    {
+        return $this->requestId;
     }
 }

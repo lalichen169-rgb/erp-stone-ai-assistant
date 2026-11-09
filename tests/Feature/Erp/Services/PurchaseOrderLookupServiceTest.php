@@ -85,4 +85,46 @@ class PurchaseOrderLookupServiceTest extends TestCase
         $this->assertStringNotContainsString('freight_cost', $encoded);
         $this->assertStringNotContainsString('500', $encoded);
     }
+
+    public function test_finds_order_by_purchase_order_id(): void
+    {
+        $supplier = $this->createSupplierWithName('Id Lookup Supplier');
+        $product = Product::query()->create([
+            'sku' => 'TEST-ID-PO',
+            'name' => 'Id Lookup Product',
+            'material' => 'Quartz',
+            'color' => 'White',
+            'thickness_cm' => '3.00',
+            'slab_size' => '300x150',
+        ]);
+
+        $order = $this->createPurchaseOrderWithLines(
+            $supplier,
+            PurchaseOrderStatus::Received,
+            '2026-05-15',
+            '2026-06-30',
+            '1100.00',
+            [['product' => $product, 'quantity' => 5, 'unit_cost' => '99.00']]
+        );
+
+        $result = $this->service->search($this->salesUser, ['purchase_order_id' => $order->id]);
+
+        $this->assertSame(1, $result['meta']['total']);
+        $this->assertCount(1, $result['data']);
+        $this->assertSame($order->id, $result['data'][0]['purchase_order_id']);
+        $this->assertSame('received', $result['data'][0]['status']);
+
+        $encoded = json_encode($result['data']);
+        $this->assertIsString($encoded);
+        $this->assertStringNotContainsString('unit_cost', $encoded);
+        $this->assertStringNotContainsString('freight_cost', $encoded);
+    }
+
+    public function test_purchase_order_id_filter_returns_empty_when_missing(): void
+    {
+        $result = $this->service->search($this->salesUser, ['purchase_order_id' => 9_999_999]);
+
+        $this->assertSame(0, $result['meta']['total']);
+        $this->assertSame([], $result['data']);
+    }
 }

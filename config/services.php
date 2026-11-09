@@ -35,4 +35,17 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | OpenAI (mirrors config/openai.php — single env source avoids load-order bugs)
+    |--------------------------------------------------------------------------
+    */
+    'openai' => [
+        'api_key' => config('openai.api_key'),
+        'organization' => config('openai.organization'),
+        'project' => config('openai.project'),
+        'base_uri' => config('openai.base_uri'),
+        'request_timeout' => config('openai.request_timeout', 30),
+    ],
+
 ];

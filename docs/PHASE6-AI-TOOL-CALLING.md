@@ -38,7 +38,7 @@ flowchart TB
 | Component | Role |
 |-----------|------|
 | `AiToolCallingService` | Iteration limits, duplicate-call guard, token aggregation, calls `ToolExecutor` per `AiToolCall`, builds the next `AiRequest` **via a driver** (no OpenAI/Anthropic imports). |
-| `AiToolCallingDriverInterface` | Provider-specific translation: first request shape and “send tool results back” continuation (`OpenAiToolCallingDriver`, `ClaudeToolCallingDriver`). |
+| `AiToolCallingDriverInterface` | Provider-specific translation: first request shape and “send tool results back” continuation (`OpenAiToolCallingDriver`, `ClaudeToolCallingDriver`, `OllamaToolCallingDriver`). |
 | `AiAgentService` | Single entry to `AiProviderFactory` → `complete(AiRequest)`. |
 | `ToolRegistry` | Permitted `AiToolDefinition[]` for the user (defense in depth). |
 | `ToolExecutor` | Strip forbidden keys, resolve tool, `allowedFor`, execute, safe errors. |
