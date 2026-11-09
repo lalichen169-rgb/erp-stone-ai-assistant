@@ -2,8 +2,6 @@
 
 A **Laravel 12** application that exposes an **ERP-aware AI assistant** over a **Sanctum-authenticated JSON API**, with a minimal **Vite + Tailwind** chat UI. **Sales** and **Purchasing** roles are enforced with Laravel **Gates**, ERP **services**, and **AI tools** — not by model prompts alone.
 
-**Interviewer-facing documentation (Word):** see `docs/submission/` for **seven** DOCX files — reference summaries, setup, testing, demo, acceptance, and a technical interview handbook (regenerated with `python tools/build_phase13_submission.py` and `python tools/build_phase16_interview_handbook.py`; requires `python-docx`, `matplotlib`, `pillow`). Regenerating does not require live AI APIs or Docker.
-
 ### Challenge Part 3 checklist (README)
 
 | Requirement | Section in this README |
@@ -262,7 +260,7 @@ resources/js/chat/            # Chat frontend + polling recovery
 database/migrations/          # Schema (+ assistant_runs)
 tests/Feature/                # PHPUnit feature tests
 docker-compose.yml            # Optional container stack (incl. queue service)
-docs/submission/              # Interviewer Word documents
+docs/submission/              # Word submission documents
 docs/PHASE*.md                # Internal phase notes
 ```
 
