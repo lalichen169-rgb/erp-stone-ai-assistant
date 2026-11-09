@@ -1,0 +1,33 @@
+StoneERP-AI-Assistant — project-local MySQL distribution record
+================================================================
+
+Product:     MySQL Community Server 8.4 LTS
+Version:     8.4.13
+
+Official download page:
+  https://dev.mysql.com/downloads/mysql/8.4.html
+
+Package:
+  mysql-8.4.13-winx64.zip (Windows x64 ZIP Archive)
+
+Direct CDN URL used for download (Oracle CDN, same package as official listing):
+  https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.13-winx64.zip
+
+Integrity (verified at install time):
+  Official MD5 (published on dev.mysql.com): 7b94489d5524dea9b27097068bea25a8
+  Verified MD5:                              7b94489d5524dea9b27097068bea25a8
+  Computed SHA-256 (not published by Oracle for this artifact):
+    e9cd98b1d23f122987b1afca26ad942efec5891481103d48ae3cde237fa3ea54
+
+Note: Oracle documents MD5 and GPG signature verification for Windows ZIP packages.
+      No official SHA-256 file was available for this build at install time.
+
+Extracted server root:
+  D:\MARCOM_PROJECTS\PrivateProjects\StoneERP-AI-Assistant\tools\mysql\server\
+
+Download cache:
+  D:\MARCOM_PROJECTS\PrivateProjects\StoneERP-AI-Assistant\tools\.download-cache\mysql-8.4.13-winx64.zip
+
+Installed: 2026-11-05
+
+XAMPP MariaDB at C:\xampp\ was not modified.

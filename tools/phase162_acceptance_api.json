@@ -1,0 +1,176 @@
+{
+    "generated_at": "2026-11-09T17:09:11+00:00",
+    "environment": "local",
+    "results": {
+        "AUTH-01": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "AUTH-02": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "AUTH-03": {
+            "status": "Passed",
+            "http": 401,
+            "notes": ""
+        },
+        "AUTH-04": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "AUTH-05": {
+            "status": "Passed",
+            "http": 401,
+            "notes": ""
+        },
+        "AUTH-06": {
+            "status": "Passed",
+            "http": 204,
+            "notes": ""
+        },
+        "AUTH-07": {
+            "status": "Passed",
+            "http": 401,
+            "notes": ""
+        },
+        "SALES-01": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "SALES-02a": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "SALES-02b": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "SALES-03": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "SALES-04": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "SALES-05": {
+            "status": "Passed",
+            "http": 403,
+            "notes": ""
+        },
+        "SALES-06": {
+            "status": "Passed",
+            "http": 403,
+            "notes": ""
+        },
+        "PURCH-01": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "PURCH-02": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "PURCH-03": {
+            "status": "Passed",
+            "http": 200,
+            "notes": "PO list omits line unit costs by design; costs via landed-cost endpoint"
+        },
+        "PURCH-04": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "PURCH-05": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "PURCH-06": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "PROP-01": {
+            "status": "Failed",
+            "http": 422,
+            "notes": "no proposal_id"
+        },
+        "PROP-02": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "PROP-03": {
+            "status": "Failed",
+            "http": 405,
+            "notes": ""
+        },
+        "PROP-04": {
+            "status": "Failed",
+            "http": 405,
+            "notes": ""
+        },
+        "PROP-05": {
+            "status": "Failed",
+            "http": 405,
+            "notes": ""
+        },
+        "PROP-06": {
+            "status": "Failed",
+            "http": 422,
+            "notes": ""
+        },
+        "PROP-07": {
+            "status": "Passed",
+            "http": 422,
+            "notes": ""
+        },
+        "PROP-08": {
+            "status": "Failed",
+            "http": 405,
+            "notes": ""
+        },
+        "PROP-09": {
+            "status": "Failed",
+            "http": 404,
+            "notes": ""
+        },
+        "PROP-10": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "SEC-01": {
+            "status": "Passed",
+            "http": 401,
+            "notes": ""
+        },
+        "SEC-02": {
+            "status": "Passed",
+            "http": 403,
+            "notes": "403 before validation \u2014 Sales cannot access proposal create route"
+        },
+        "PH16.3": {
+            "status": "Skipped \u2014 User requested deferral until a real provider API key is ready.",
+            "http": 0,
+            "notes": ""
+        },
+        "UI-BATCH": {
+            "status": "Pending User Verification",
+            "http": 0,
+            "notes": "Browser MCP\/UI not executed in this session"
+        }
+    }
+}

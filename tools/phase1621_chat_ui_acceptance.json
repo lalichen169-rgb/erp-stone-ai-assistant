@@ -1,0 +1,56 @@
+{
+    "generated_at": "2026-11-09T17:27:56+00:00",
+    "ai_provider": "openai",
+    "results": {
+        "UI-A-clarification": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "UI-A-no-po": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "UI-B-proposal": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "UI-C-qty-warehouse": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "UI-E-invalid-wh": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "UI-G-cancel": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "UI-F-confirm": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "UI-F-stock-unchanged": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "UI-SALES-po-refusal": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        },
+        "UI-SALES-stock": {
+            "status": "Passed",
+            "http": 200,
+            "notes": ""
+        }
+    }
+}

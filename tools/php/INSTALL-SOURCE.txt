@@ -1,0 +1,24 @@
+StoneERP-AI-Assistant — project-local PHP distribution record
+=============================================================
+
+Version:     PHP 8.3.36 (NTS, x64, VS16 / Visual C++ 2019)
+Build label: 8.3.36-1
+
+Official source:
+  https://windows.php.net/downloads/releases/php-8.3.36-1-nts-Win32-vs16-x64.zip
+
+SHA-256 (verified at install time):
+  1a097d52b7a68622cdc723073b61cc70caf79c941218ff65b2d8441dbc6b10d4
+
+Installed to:
+  D:\MARCOM_PROJECTS\PrivateProjects\StoneERP-AI-Assistant\tools\php\
+
+Download cache (optional to delete after install):
+  D:\MARCOM_PROJECTS\PrivateProjects\StoneERP-AI-Assistant\tools\.download-cache\
+
+Installed: 2026-11-05
+
+This runtime is independent of XAMPP (C:\xampp\php). Removing tools\php\ does not affect XAMPP.
+
+StoneERP php.ini overrides (apply after reinstall from ZIP):
+  See stoneerp-overrides.ini — max_execution_time and max_input_time = 600 (10 minutes).
