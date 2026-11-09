@@ -178,7 +178,7 @@ flowchart LR
 | Provider | Implementation status |
 |----------|------------------------|
 | OpenAI | **Implemented** — `OpenAiProvider` |
-| Anthropic Claude (direct API) | **Implemented** — `ClaudeProvider` (Messages API) |
+| Anthropic Claude (direct API) | **Implemented(not tested)** — `ClaudeProvider` (Messages API) |
 | Ollama | **Implemented** — `OllamaProvider` |
 | Amazon Bedrock | **Not implemented** — factory throws; separate SDK/IAM/regional integration, **not** the same code path as direct Claude |
 | Google Gemini | **Not implemented** — factory throws |
