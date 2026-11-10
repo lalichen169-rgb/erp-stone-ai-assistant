@@ -1,0 +1,86 @@
+# Stone ERP AI — local/container stack (MySQL 8 + Redis + Laravel + queue worker).
+# Copy docker/compose.env.example → docker/compose.env and set passwords + APP_KEY.
+# Start: docker compose --env-file docker/compose.env up -d --build
+#
+# Do not commit docker/compose.env (contains secrets).
+
+name: stoneerp-ai
+
+# Shared image build so `queue` does not require a separately built stoneerp-ai:local image.
+x-app-build: &app-build
+  context: .
+  dockerfile: Dockerfile
+
+services:
+  app:
+    build: *app-build
+    image: stoneerp-ai:local
+    ports:
+      - "${APP_PORT:-8080}:80"
+    env_file:
+      - docker/compose.env
+    volumes:
+      - app_storage:/var/www/html/storage
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/up"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 50s
+
+  queue:
+    build: *app-build
+    image: stoneerp-ai:local
+    # Queue name and job timeout follow ai.assistant.async.* (AI_ASSISTANT_QUEUE, AI_ASSISTANT_JOB_TIMEOUT).
+    command:
+      - sh
+      - -c
+      - >-
+        exec php -d max_execution_time=0 artisan queue:work
+        $${AI_ASSISTANT_QUEUE_CONNECTION:-redis}
+        --queue=$${AI_ASSISTANT_QUEUE:-default}
+        --sleep=3 --tries=1
+        --timeout=$${AI_ASSISTANT_JOB_TIMEOUT:-900}
+        --max-time=3600
+    env_file:
+      - docker/compose.env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    env_file:
+      - docker/compose.env
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  app_storage:
+  mysql_data:
+  redis_data:
