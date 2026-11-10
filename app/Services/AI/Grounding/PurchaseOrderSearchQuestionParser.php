@@ -13,12 +13,17 @@ final class PurchaseOrderSearchQuestionParser
     public function __construct(
         private readonly LandedCostQuestionParser $landedCostQuestionParser,
         private readonly LandedCostIntentDetector $landedCostIntent,
+        private readonly PurchaseOrderCreationIntentDetector $purchaseOrderCreationIntentDetector,
     ) {}
 
     public function isPurchaseOrderSearchIntent(string $text): bool
     {
         $trimmed = trim($text);
         if ($trimmed === '') {
+            return false;
+        }
+
+        if ($this->purchaseOrderCreationIntentDetector->isPurchaseOrderCreationRequest($trimmed)) {
             return false;
         }
 

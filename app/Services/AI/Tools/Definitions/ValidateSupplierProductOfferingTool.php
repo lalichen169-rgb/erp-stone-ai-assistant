@@ -34,7 +34,7 @@ final class ValidateSupplierProductOfferingTool implements AiToolInterface
     {
         return new AiToolDefinition(
             name: $this->name(),
-            description: 'Validate supplier-product catalogue mapping and return active status and catalogue unit cost when configured (Purchasing only).',
+            description: 'Validate supplier-product catalogue mapping and return active status and catalogue unit_cost when configured (Purchasing only). Use returned unit_cost in proposeDraftPurchaseOrder; do not ask the user to type unit prices when this tool supplies a cost.',
             parameters: [
                 'type' => 'object',
                 'additionalProperties' => false,

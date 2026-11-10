@@ -5,6 +5,7 @@ import {
     fetchAssistantRun,
     fetchCurrentUser,
     fetchProposal,
+    fetchProposalList,
     login,
     revokeToken,
     sendAssistantMessage,
@@ -23,6 +24,9 @@ const CONV_KEY = 'stoneerp_chat_conversation_id';
 const RUN_KEY = 'stoneerp_chat_active_run_id';
 const RUN_USER_KEY = 'stoneerp_chat_active_run_user_id';
 const RUN_MESSAGE_KEY = 'stoneerp_chat_active_run_message';
+
+/** Ignores stale async responses when the user resets the proposal loader or starts a newer load. */
+let proposalLoadGeneration = 0;
 
 /** @typedef {{ id: string, kind: 'user'|'assistant'|'system', text: string, isSample?: boolean, assistantPayload?: Record<string, unknown>|null, success?: boolean|null }} ChatMessage */
 
@@ -48,6 +52,13 @@ const state = {
     hintedProposalId: null,
     /** @type {string} */
     manualProposalId: '',
+    /** After "Load another", skip auto-using detected id until user enters or picks one. */
+    skipHintOnProposalLoad: false,
+    showProposalIdList: false,
+    proposalIdListLoading: false,
+    /** @type {Array<Record<string, unknown>>|null} */
+    proposalIdList: null,
+    proposalIdListError: null,
     showDetails: false,
 };
 
@@ -94,6 +105,10 @@ function clearSession() {
     state.messages = [];
     state.loadedProposal = null;
     state.hintedProposalId = null;
+    state.manualProposalId = '';
+    state.showProposalIdList = false;
+    state.proposalIdList = null;
+    state.proposalIdListError = null;
     sessionStorage.removeItem(TOKEN_KEY);
     sessionStorage.removeItem(USER_KEY);
     sessionStorage.removeItem(CONV_KEY);
@@ -273,6 +288,10 @@ function handleNewConversation() {
     state.loadedProposal = null;
     state.hintedProposalId = null;
     state.proposalLoadError = null;
+    state.manualProposalId = '';
+    state.showProposalIdList = false;
+    state.proposalIdList = null;
+    state.proposalIdListError = null;
     state.pendingSend = null;
     clearPendingRunStorage();
     persistSession();
@@ -662,13 +681,19 @@ async function handleLoadProposal(proposalId) {
     if (!state.token || !state.conversationId || !isPurchasing()) {
         return;
     }
+    const loadGen = ++proposalLoadGeneration;
     state.proposalLoadError = null;
     state.loadedProposal = null;
     state.proposalActionPending = true;
+    state.skipHintOnProposalLoad = false;
     render();
 
     const client = createApiClient(state.token);
     const res = await fetchProposal(client, proposalId, state.conversationId);
+
+    if (loadGen !== proposalLoadGeneration) {
+        return;
+    }
 
     state.proposalActionPending = false;
     if (res.status !== 200) {
@@ -679,7 +704,87 @@ async function handleLoadProposal(proposalId) {
     const wrapped = res.data;
     state.loadedProposal =
         wrapped?.data !== undefined && typeof wrapped.data === 'object' ? wrapped.data : wrapped;
+    state.manualProposalId = '';
     render();
+}
+
+function focusProposalLoader() {
+    requestAnimationFrame(() => {
+        const input = /** @type {HTMLInputElement|null} */ (document.getElementById('manual-proposal-id'));
+        const panel = document.getElementById('proposal-loader-panel');
+        input?.focus();
+        panel?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+}
+
+function handleLoadAnotherProposal() {
+    proposalLoadGeneration += 1;
+    state.loadedProposal = null;
+    state.proposalLoadError = null;
+    state.proposalActionPending = false;
+    state.manualProposalId = '';
+    state.skipHintOnProposalLoad = true;
+    state.showProposalIdList = true;
+    render();
+    void refreshProposalIdList();
+    focusProposalLoader();
+}
+
+/**
+ * @param {string} proposalId
+ */
+async function copyTextToClipboard(proposalId) {
+    const text = String(proposalId);
+    try {
+        await navigator.clipboard.writeText(text);
+        state.messages.push({
+            id: crypto.randomUUID(),
+            kind: 'system',
+            text: 'Proposal id copied to clipboard.',
+        });
+        render();
+    } catch {
+        state.messages.push({
+            id: crypto.randomUUID(),
+            kind: 'system',
+            text: 'Could not copy automatically. Select the id and copy manually.',
+        });
+        render();
+    }
+}
+
+async function refreshProposalIdList() {
+    if (!state.token || !state.conversationId || !isPurchasing()) {
+        return;
+    }
+    state.proposalIdListLoading = true;
+    state.proposalIdListError = null;
+    render();
+
+    const client = createApiClient(state.token);
+    const res = await fetchProposalList(client, state.conversationId);
+    state.proposalIdListLoading = false;
+
+    if (res.status !== 200) {
+        state.proposalIdListError = formatApiError(res);
+        state.proposalIdList = null;
+        render();
+        return;
+    }
+
+    const rows = res.data?.data;
+    state.proposalIdList = Array.isArray(rows) ? rows : [];
+    render();
+}
+
+async function handleToggleProposalIdList() {
+    const next = !state.showProposalIdList;
+    state.showProposalIdList = next;
+    if (next && state.proposalIdList === null && !state.proposalIdListLoading) {
+        await refreshProposalIdList();
+    } else {
+        render();
+    }
 }
 
 async function handleConfirmProposal() {
@@ -785,9 +890,44 @@ function attachListeners() {
 
     document.getElementById('btn-load-proposal')?.addEventListener('click', () => {
         const manual = /** @type {HTMLInputElement|null} */ (document.getElementById('manual-proposal-id'));
-        const id = (manual?.value?.trim() || state.hintedProposalId || '').toString();
+        const hinted = state.skipHintOnProposalLoad ? '' : (state.hintedProposalId || '');
+        const id = (manual?.value?.trim() || hinted || '').toString();
         if (id) {
             void handleLoadProposal(id);
+        }
+    });
+
+    document.getElementById('btn-toggle-proposal-list')?.addEventListener('click', () => {
+        void handleToggleProposalIdList();
+    });
+
+    document.getElementById('btn-load-another-proposal')?.addEventListener('click', () => {
+        handleLoadAnotherProposal();
+    });
+
+    document.getElementById('proposal-id-list')?.addEventListener('click', (e) => {
+        const target = /** @type {HTMLElement|null} */ (e.target instanceof HTMLElement ? e.target.closest('[data-proposal-id]') : null);
+        if (!target) {
+            return;
+        }
+        const pid = target.getAttribute('data-proposal-id');
+        const action = target.getAttribute('data-proposal-action');
+        if (!pid) {
+            return;
+        }
+        if (action === 'copy') {
+            void copyTextToClipboard(pid);
+            return;
+        }
+        if (action === 'use') {
+            proposalLoadGeneration += 1;
+            state.manualProposalId = pid;
+            state.loadedProposal = null;
+            state.skipHintOnProposalLoad = false;
+            render();
+            const input = /** @type {HTMLInputElement|null} */ (document.getElementById('manual-proposal-id'));
+            input?.focus();
+            input?.select();
         }
     });
 
@@ -971,10 +1111,87 @@ function assistantMetaHtml(data) {
     </details>`;
 }
 
+function proposalIdListPanelHtml() {
+    const toggleLabel = state.showProposalIdList ? 'Hide proposal ids' : 'Show proposal ids';
+    const disabled = !state.conversationId || state.proposalActionPending;
+
+    let listBody = '';
+    if (state.showProposalIdList) {
+        if (state.proposalIdListLoading) {
+            listBody = '<p class="text-[11px] text-slate-500 px-1 py-2">Loading proposals for this conversation…</p>';
+        } else if (state.proposalIdListError) {
+            listBody = `<p class="text-[11px] text-red-700 px-1 py-2">${escapeHtml(state.proposalIdListError)}</p>`;
+        } else if (!state.proposalIdList || state.proposalIdList.length === 0) {
+            listBody =
+                '<p class="text-[11px] text-slate-500 px-1 py-2">No proposals in this conversation yet.</p>';
+        } else {
+            listBody = `
+              <div id="proposal-id-list" class="mt-2 rounded-lg border border-slate-200 bg-white" role="region" aria-label="Proposal ids for this conversation">
+              <ul class="divide-y divide-slate-100 text-[11px] m-0 p-0 list-none">
+                ${state.proposalIdList
+                    .map((row) => {
+                        const pid = String(row.proposal_id ?? '');
+                        const status = String(row.status ?? '');
+                        const supplier = row.supplier_name ? String(row.supplier_name) : '';
+                        return `
+                  <li class="px-2 py-2 flex flex-col gap-1.5">
+                    <div class="flex items-start justify-between gap-2">
+                      <div class="min-w-0 flex-1">
+                        <p class="font-mono text-[10px] text-slate-800 break-all" title="${escapeHtml(pid)}">${escapeHtml(pid)}</p>
+                        <p class="text-slate-500 mt-0.5">${escapeHtml(status)}${supplier ? ` · ${escapeHtml(supplier)}` : ''}</p>
+                      </div>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5">
+                      <button type="button" data-proposal-id="${escapeHtml(pid)}" data-proposal-action="copy"
+                        class="text-[10px] font-medium rounded-md border border-slate-300 px-2 py-0.5 hover:bg-slate-50">
+                        Copy UUID
+                      </button>
+                      <button type="button" data-proposal-id="${escapeHtml(pid)}" data-proposal-action="use"
+                        class="text-[10px] font-medium rounded-md border border-slate-300 px-2 py-0.5 hover:bg-slate-50">
+                        Use in loader
+                      </button>
+                    </div>
+                  </li>`;
+                    })
+                    .join('')}
+              </ul>
+              </div>`;
+        }
+    }
+
+    return `
+      <div class="rounded-lg border border-slate-200 bg-white/80 px-2 py-2">
+        <button type="button" id="btn-toggle-proposal-list" ${disabled ? 'disabled' : ''}
+          class="w-full text-center text-[11px] font-semibold rounded-lg bg-[#1e3a5f] text-white px-3 py-2 hover:bg-[#152a46] disabled:opacity-40 disabled:cursor-not-allowed">
+          ${escapeHtml(toggleLabel)} for this conversation
+        </button>
+        ${listBody}
+      </div>`;
+}
+
+function proposalLoadControlsHtml() {
+    return `
+        <div id="proposal-loader-panel" class="rounded-lg border border-slate-200 bg-white px-2 py-2 space-y-2">
+          <div class="flex gap-2 items-end">
+            <div class="flex-1 min-w-0">
+              <label for="manual-proposal-id" class="text-[10px] font-medium text-slate-600">Proposal id (UUID)</label>
+              <input id="manual-proposal-id" type="text" spellcheck="false" autocomplete="off"
+                placeholder="e.g.(UUID): 6b78a919-f3a4-4c2a-9b1c-8e7d6f5a4b3c"
+                class="w-full mt-0.5 rounded-lg border border-slate-300 px-2 py-1.5 text-[11px] font-mono"
+                value="${escapeHtml(state.manualProposalId ?? '')}" />
+            </div>
+            <button type="button" id="btn-load-proposal" ${!state.conversationId || state.proposalActionPending ? 'disabled' : ''}
+              class="shrink-0 text-xs font-medium rounded-lg bg-[#1e3a5f] text-white px-3 py-1.5 disabled:opacity-40">
+              Load
+            </button>
+          </div>
+        </div>`;
+}
+
 function proposalSidebarHtml() {
     const hint = state.hintedProposalId
-        ? `<p class="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1">Detected proposal #${escapeHtml(state.hintedProposalId)} from the last reply (heuristic).</p>`
-        : '<p class="text-xs text-slate-500">If the assistant mentions a proposal id, it can be loaded here.</p>';
+        ? `<p class="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1">Detected proposal id from the last reply. Use <strong class="font-mono text-[10px]">${escapeHtml(state.hintedProposalId)}</strong> or pick from the list below.</p>`
+        : '<p class="text-xs text-slate-500">Paste a proposal UUID from the assistant or pick one from the list, then click Load.</p>';
 
     const loadErr = state.proposalLoadError
         ? `<p class="text-xs text-red-700">${escapeHtml(state.proposalLoadError)}</p>`
@@ -987,7 +1204,8 @@ function proposalSidebarHtml() {
         const lines = Array.isArray(p.lines) ? p.lines : [];
         const showCosts = isPurchasing();
         body = `
-          <div class="space-y-2 text-xs">
+          <div class="rounded-lg border border-slate-200 bg-white p-2 space-y-2 text-xs shadow-sm">
+            <p class="text-[10px] font-mono text-slate-600 break-all" title="Loaded proposal id">${escapeHtml(String(p.proposal_id ?? ''))}</p>
             <p><span class="text-slate-500">Status:</span> <strong>${escapeHtml(String(p.status ?? ''))}</strong></p>
             <p><span class="text-slate-500">Supplier:</span> ${escapeHtml(String(p.supplier_name ?? ''))} (id ${escapeHtml(String(p.supplier_id ?? ''))})</p>
             <p><span class="text-slate-500">Order / ETA:</span> ${escapeHtml(String(p.order_date ?? ''))} → ${escapeHtml(String(p.eta ?? ''))}</p>
@@ -1023,28 +1241,29 @@ function proposalSidebarHtml() {
                 Cancel proposal
               </button>
             </div>
+            <button type="button" id="btn-load-another-proposal" class="text-[10px] text-slate-500 underline hover:text-slate-700">
+              Go to proposal list...
+            </button>
           </div>`;
     }
 
+    const loadSection = p ? '' : `${proposalLoadControlsHtml()}${proposalIdListPanelHtml()}`;
+    const browseAfterDetails = p ? proposalIdListPanelHtml() : '';
+
     return `
-      <aside class="w-full lg:w-[min(28%,320px)] shrink-0 border-t lg:border-t-0 lg:border-l border-slate-200 bg-slate-50 p-3 flex flex-col gap-3 min-h-0 overflow-y-auto">
-        <div class="flex items-center justify-between gap-2">
-          <h2 class="text-xs font-semibold text-slate-700 uppercase tracking-wide">Draft PO (Purchasing)</h2>
-          <button type="button" id="btn-toggle-details" class="text-[10px] text-slate-500 underline">${state.showDetails ? 'Hide' : 'Show'} reply details</button>
-        </div>
-        ${hint}
-        <div class="flex gap-2 items-end">
-          <div class="flex-1">
-            <label for="manual-proposal-id" class="text-[10px] text-slate-500">Proposal id</label>
-            <input id="manual-proposal-id" type="text" inputmode="numeric" placeholder="e.g. 12"
-              class="w-full mt-0.5 rounded-lg border border-slate-300 px-2 py-1 text-xs" value="${escapeHtml(state.manualProposalId ?? '')}" />
+      <aside class="w-full lg:w-[min(28%,320px)] shrink-0 border-t lg:border-t-0 lg:border-l border-slate-200 bg-slate-50 p-3 flex flex-col min-h-0 overflow-hidden">
+        <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3">
+          <div class="flex items-center justify-between gap-2 shrink-0">
+            <h2 class="text-xs font-semibold text-slate-700 uppercase tracking-wide">Draft PO (Purchasing)</h2>
+            <button type="button" id="btn-toggle-details" class="text-[10px] text-slate-500 underline">${state.showDetails ? 'Hide' : 'Show'} reply details</button>
           </div>
-          <button type="button" id="btn-load-proposal" ${!state.conversationId || state.proposalActionPending ? 'disabled' : ''}
-            class="text-xs font-medium rounded-lg bg-[#1e3a5f] text-white px-3 py-1.5 disabled:opacity-40">Load</button>
+          ${hint}
+          ${loadSection}
+          ${loadErr}
+          ${body}
+          ${browseAfterDetails}
         </div>
-        ${loadErr}
-        ${body}
-        <p class="text-[10px] text-slate-400 mt-auto">Uses <code class="bg-slate-200/80 px-1 rounded">conversation_key</code> = current conversation UUID. Confirmation never runs automatically.</p>
+        <p class="text-[10px] text-slate-400 shrink-0 pt-2 mt-2 border-t border-slate-200/80 leading-snug">Uses <code class="bg-slate-200/80 px-1 rounded">conversation_key</code> = current conversation UUID. Confirmation never runs automatically.</p>
       </aside>`;
 }
 

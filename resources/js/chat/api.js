@@ -84,6 +84,15 @@ export async function fetchProposal(client, proposalId, conversationKey) {
 
 /**
  * @param {import('axios').AxiosInstance} client
+ * @param {string} conversationKey
+ */
+export async function fetchProposalList(client, conversationKey) {
+    const q = new URLSearchParams({ conversation_key: conversationKey });
+    return client.get(`/api/purchase-order-proposals?${q.toString()}`);
+}
+
+/**
+ * @param {import('axios').AxiosInstance} client
  * @param {string} proposalId
  * @param {string} conversationKey
  * @param {string} idempotencyKey

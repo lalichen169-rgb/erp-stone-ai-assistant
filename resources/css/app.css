@@ -10,3 +10,28 @@
     --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
         'Segoe UI Symbol', 'Noto Color Emoji';
 }
+
+/* Scroll only inside #proposal-id-list (proposal sidebar list panel) */
+#proposal-id-list {
+    max-height: 13rem;
+    overflow-x: hidden;
+    overflow-y: scroll;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(148 163 184) rgb(241 245 249);
+}
+
+#proposal-id-list::-webkit-scrollbar {
+    width: 8px;
+}
+
+#proposal-id-list::-webkit-scrollbar-track {
+    background: rgb(241 245 249);
+    border-radius: 4px;
+}
+
+#proposal-id-list::-webkit-scrollbar-thumb {
+    background: rgb(148 163 184);
+    border-radius: 4px;
+}

@@ -20,6 +20,7 @@ final class ErpDeterministicPreflight
         private readonly PurchaseOrderSearchReply $purchaseOrderSearchReply,
         private readonly OverduePurchaseOrderSearchReply $overduePurchaseOrderSearchReply,
         private readonly SalesSupplierOverduePurchaseOrderAnalysisRefusal $salesSupplierOverdueAnalysisRefusal,
+        private readonly BroadProductAvailabilityReply $broadProductAvailabilityReply,
     ) {}
 
     public function shouldBypassClarification(User $user, string $rawMessage, string $resolvedQuestion): bool
@@ -46,6 +47,10 @@ final class ErpDeterministicPreflight
         }
 
         if ($this->purchasingLandedCostReply->tryBuildReply($user, $resolvedQuestion, $rawMessage) !== null) {
+            return true;
+        }
+
+        if ($this->broadProductAvailabilityReply->tryBuildReply($user, $resolvedQuestion, $rawMessage) !== null) {
             return true;
         }
 

@@ -32,7 +32,7 @@ final class ResolveWarehouseForPurchaseTool implements AiToolInterface
     {
         return new AiToolDefinition(
             name: $this->name(),
-            description: 'Resolve a destination warehouse for PO lines (Purchasing). Match by warehouse_id, name, or city. Never invent warehouse_id.',
+            description: 'Resolve a destination warehouse for PO lines (Purchasing). Match by warehouse_id, name, or city. Never invent warehouse_id. If the user omitted a destination, ask for warehouse city or name or use searchWarehouses to list options.',
             parameters: [
                 'type' => 'object',
                 'additionalProperties' => false,

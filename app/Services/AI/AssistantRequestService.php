@@ -25,6 +25,8 @@ use App\Services\AI\Grounding\SalesBankDetailsRefusal;
 use App\Services\AI\Grounding\SalesPurchaseOrderCreationRefusal;
 use App\Services\AI\Grounding\SalesSupplierOverduePurchaseOrderAnalysisRefusal;
 use App\Services\AI\Grounding\OverduePurchaseOrderSearchReply;
+use App\Services\AI\Grounding\BroadProductAvailabilityReply;
+use App\Services\AI\Grounding\ErpCrossDomainRequestDetector;
 use App\Services\AI\Grounding\StockAcrossWarehousesReply;
 use App\Services\AI\Grounding\PurchaseOrderSearchReply;
 use App\Services\AI\Grounding\StockWarehouseCountReply;
@@ -61,6 +63,8 @@ final class AssistantRequestService
         private readonly StockWarehouseCountReply $stockWarehouseCountReply,
         private readonly PurchaseOrderSearchReply $purchaseOrderSearchReply,
         private readonly PurchasingWarehouseDestinationClarification $purchasingWarehouseDestinationClarification,
+        private readonly BroadProductAvailabilityReply $broadProductAvailabilityReply,
+        private readonly ErpCrossDomainRequestDetector $crossDomainRequestDetector,
     ) {}
 
     /**
@@ -427,8 +431,10 @@ final class AssistantRequestService
         $procurementBegin = $this->purchasingWarehouseDestinationClarification->tryBegin(
             $user,
             $conversation,
+            $userMessage,
             $message,
             $resolvedForModel,
+            $clientIdempotencyKey,
         );
         if ($procurementBegin !== null) {
             $result = $this->finalizeProcurementClarificationTurn(
@@ -478,6 +484,27 @@ final class AssistantRequestService
                 [
                     'deterministic' => true,
                     'purchase_order_search_disclosure' => true,
+                ],
+            );
+            if ($clientIdempotencyKey !== null) {
+                $this->conversationService->saveUserMessageIdempotencyResponse($user, $userMessage->fresh(), $result);
+            }
+
+            return $result;
+        }
+
+        $broadProductAvailabilityReply = $this->broadProductAvailabilityReply->tryBuildReply($user, $resolvedForModel, $message);
+        if ($broadProductAvailabilityReply !== null) {
+            $result = $this->finalizeDeterministicAssistantReply(
+                $user,
+                $conversation,
+                $userMessage,
+                $message,
+                $resolvedForModel,
+                $broadProductAvailabilityReply,
+                [
+                    'deterministic' => true,
+                    'broad_product_availability_disclosure' => true,
                 ],
             );
             if ($clientIdempotencyKey !== null) {
@@ -650,14 +677,25 @@ final class AssistantRequestService
             aiProvider: $aiProvider,
         );
 
+        $resetStockInheritance = $this->crossDomainRequestDetector->shouldResetInheritedStockProductFilters(
+            $originalMessage,
+            $resolvedForModel,
+        );
+
         $systemInstruction = $this->buildSystemInstruction($user);
+        if ($resetStockInheritance) {
+            $systemInstruction .= "\n\nThe latest user message is a new independent ERP request. "
+                .'Do not reuse product color, thickness, material, SKU, or warehouse filters from earlier turns unless restated in this message.';
+        }
 
         $messages = array_values(array_merge($priorContext, [AiMessage::user($resolvedForModel)]));
 
-        $inheritedProductFilters = $this->stockThreadProductContext->inheritProductFilters(
-            $conversation,
-            $userMessage,
-        );
+        $inheritedProductFilters = $resetStockInheritance
+            ? null
+            : $this->stockThreadProductContext->inheritProductFilters(
+                $conversation,
+                $userMessage,
+            );
         $stockGrounding = $this->stockCountIntentDetector->requiresGrounding(
             $resolvedForModel,
             $originalMessage,

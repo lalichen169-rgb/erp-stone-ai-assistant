@@ -34,16 +34,16 @@ final class ResolveProductsForPurchaseTool implements AiToolInterface
     {
         return new AiToolDefinition(
             name: $this->name(),
-            description: 'Strict catalogue product resolution for draft PO proposals (Purchasing). Returns match status, product_id when unique, alternatives when ambiguous, and clarification requirements. Never invent product_id.',
+            description: 'Strict catalogue product resolution for draft PO proposals (Purchasing). Prefer color (variety), material (stone type), and thickness_cm from the user message. Optional product_sku only when the user already stated a SKU—never prompt the user for SKU. Returns match status, product_id when unique, alternatives (with sku for display only) when ambiguous. Never invent product_id.',
             parameters: [
                 'type' => 'object',
                 'additionalProperties' => false,
                 'properties' => [
-                    'product_sku' => ['type' => 'string', 'maxLength' => 255],
-                    'name' => ['type' => 'string', 'maxLength' => 255],
-                    'material' => ['type' => 'string', 'maxLength' => 255],
-                    'color' => ['type' => 'string', 'maxLength' => 255],
-                    'thickness_cm' => ['type' => ['string', 'number']],
+                    'product_sku' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Optional; use only when the user explicitly mentioned a SKU'],
+                    'name' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Partial product name when the user used a formal name; variety usually belongs in color'],
+                    'material' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Stone material type from the user message (Quartz, Marble, Granite, etc.)'],
+                    'color' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Color or variety from the user message'],
+                    'thickness_cm' => ['type' => ['string', 'number'], 'description' => 'Thickness in centimeters when the user stated one (normalized server-side)'],
                     'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 50],
                 ],
             ],

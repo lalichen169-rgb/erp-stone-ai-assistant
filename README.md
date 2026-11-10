@@ -2,8 +2,6 @@
 
 A **Laravel 12** application that exposes an **ERP-aware AI assistant** over a **Sanctum-authenticated JSON API**, with a minimal **Vite + Tailwind** chat UI. **Sales** and **Purchasing** roles are enforced with Laravel **Gates**, ERP **services**, and **AI tools** — not by model prompts alone.
 
-**Interviewer-facing documentation (Word):** see `docs/submission/` for **seven** DOCX files — reference summaries, setup, testing, demo, acceptance, and a technical interview handbook (regenerated with `python tools/build_phase13_submission.py` and `python tools/build_phase16_interview_handbook.py`; requires `python-docx`, `matplotlib`, `pillow`). Regenerating does not require live AI APIs or Docker.
-
 ### Challenge Part 3 checklist (README)
 
 | Requirement | Section in this README |
@@ -63,27 +61,27 @@ sequenceDiagram
     participant ERP as ERP services
     participant DB as MySQL
 
-    U->>API: POST /api/assistant (message)
-    API->>ARS: authenticated User + message
-    ARS->>CTX: persist user message; resolve follow-up
-    ARS->>PRE: stock / PO / overdue / Sales refusal?
+    U->>API: POST assistant message
+    API->>ARS: authenticated user message
+    ARS->>CTX: persist user message and resolve follow-up
+    ARS->>PRE: stock PO overdue or Sales refusal checks
     alt Deterministic answer
         PRE->>ERP: authorized read
         ERP->>DB: Eloquent queries
-        PRE-->>U: HTTP 200 message (no provider)
+        PRE-->>U: HTTP 200 without provider
     else Provider tool loop
-        ARS->>AI: build context (bounded history)
-        AI->>P: AiRequest (tools + messages)
+        ARS->>AI: build context bounded history
+        AI->>P: AiRequest tools and messages
         P-->>AI: tool calls or text
         loop Each tool call
-            AI->>TE: execute(tool, User)
-            TE->>ERP: business logic + Gates
+            AI->>TE: execute tool for User
+            TE->>ERP: business logic and Gates
             ERP->>DB: queries
-            TE-->>AI: tool result (redacted if needed)
+            TE-->>AI: tool result redacted if needed
         end
-        AI-->>U: HTTP 200 answer (OpenAI/Claude)
+        AI-->>U: HTTP 200 answer OpenAI or Claude
     end
-    Note over ARS,DB: Ollama: accept HTTP 202, queue ProcessOllamaAssistantRun, poll GET /assistant/runs/{id}
+    Note over ARS,DB: Ollama path HTTP 202 queue worker poll run status
 ```
 
 **Numbered flow (synchronous OpenAI/Claude path):**
@@ -180,7 +178,7 @@ flowchart LR
 | Provider | Implementation status |
 |----------|------------------------|
 | OpenAI | **Implemented** — `OpenAiProvider` |
-| Anthropic Claude (direct API) | **Implemented** — `ClaudeProvider` (Messages API) |
+| Anthropic Claude (direct API) | **Implemented(not tested)** — `ClaudeProvider` (Messages API) |
 | Ollama | **Implemented** — `OllamaProvider` |
 | Amazon Bedrock | **Not implemented** — factory throws; separate SDK/IAM/regional integration, **not** the same code path as direct Claude |
 | Google Gemini | **Not implemented** — factory throws |
@@ -262,7 +260,7 @@ resources/js/chat/            # Chat frontend + polling recovery
 database/migrations/          # Schema (+ assistant_runs)
 tests/Feature/                # PHPUnit feature tests
 docker-compose.yml            # Optional container stack (incl. queue service)
-docs/submission/              # Interviewer Word documents
+docs/submission/              # Word submission documents
 docs/PHASE*.md                # Internal phase notes
 ```
 

@@ -5,6 +5,7 @@ namespace App\Services\Erp;
 use App\Enums\PendingProcurementClarificationType;
 use App\Models\Conversation;
 use App\Models\PendingProcurementClarification;
+use App\Models\Supplier;
 use App\Models\User;
 use App\Services\AI\Grounding\DraftPurchaseOrderMessageParser;
 use App\Services\Erp\Exceptions\PurchaseOrderProposalException;
@@ -42,6 +43,36 @@ final class PendingProcurementClarificationService
     /**
      * @param  array<string, mixed>  $draftInput
      */
+    public function beginSupplierSelection(
+        User $user,
+        Conversation $conversation,
+        array $draftInput,
+        int $productId,
+        int $quantity,
+        string $originalUserMessage,
+    ): PendingProcurementClarification {
+        $ttlMinutes = (int) config('erp.procurement.pending_clarification_ttl_minutes', 30);
+        $expiresAt = Carbon::now()->addMinutes(max($ttlMinutes, 1));
+
+        $payload = [
+            'draft_input' => $draftInput,
+            'product_id' => $productId,
+            'quantity' => $quantity,
+            'original_user_message' => $originalUserMessage,
+            'awaiting' => 'supplier',
+        ];
+
+        return PendingProcurementClarification::query()->updateOrCreate(
+            ['conversation_id' => $conversation->id],
+            [
+                'user_id' => $user->id,
+                'type' => PendingProcurementClarificationType::SupplierSelection,
+                'payload' => $payload,
+                'expires_at' => $expiresAt,
+            ],
+        );
+    }
+
     public function beginWarehouseDestination(
         User $user,
         Conversation $conversation,
@@ -90,6 +121,24 @@ final class PendingProcurementClarificationService
         string $conversationKey,
         string $idempotencyKey,
     ): array {
+        return $this->tryResumePendingProcurement($user, $conversation, $replyText, $conversationKey, $idempotencyKey);
+    }
+
+    /**
+     * @return array{
+     *     status: string,
+     *     clarification_question?: string,
+     *     proposal?: array<string, mixed>,
+     *     message?: string
+     * }
+     */
+    public function tryResumePendingProcurement(
+        User $user,
+        Conversation $conversation,
+        string $replyText,
+        string $conversationKey,
+        string $idempotencyKey,
+    ): array {
         if ($this->draftPurchaseOrderMessageParser->looksLikeUnrelatedStandaloneQuestion($replyText)) {
             return ['status' => 'no_pending'];
         }
@@ -108,7 +157,8 @@ final class PendingProcurementClarificationService
             if ($pending->isExpired()) {
                 $pending->delete();
 
-                if ($this->replyLooksLikeWarehouseSelection($user, $replyText)) {
+                if ($this->replyLooksLikeWarehouseSelection($user, $replyText)
+                    || $this->replyLooksLikeSupplierSelection($replyText)) {
                     return [
                         'status' => 'expired',
                         'message' => 'The pending purchase order request expired. Please send the full draft purchase order request again.',
@@ -118,12 +168,26 @@ final class PendingProcurementClarificationService
                 return ['status' => 'no_pending'];
             }
 
-            if ($pending->type !== PendingProcurementClarificationType::WarehouseDestination) {
-                return ['status' => 'no_pending'];
+            if ($pending->type === PendingProcurementClarificationType::SupplierSelection) {
+                return $this->resumeLockedSupplierSelection($user, $conversation, $pending, $replyText, $conversationKey, $idempotencyKey);
             }
 
-            return $this->resumeLockedPending($user, $conversation, $pending, $replyText, $conversationKey, $idempotencyKey);
+            if ($pending->type === PendingProcurementClarificationType::WarehouseDestination) {
+                return $this->resumeLockedPending($user, $conversation, $pending, $replyText, $conversationKey, $idempotencyKey);
+            }
+
+            return ['status' => 'no_pending'];
         });
+    }
+
+    private function replyLooksLikeSupplierSelection(string $replyText): bool
+    {
+        $trimmed = trim($replyText);
+        if ($trimmed === '') {
+            return false;
+        }
+
+        return ! preg_match('/\b(create|purchase\s+order|draft\s+po)\b/i', $trimmed);
     }
 
     private function replyLooksLikeWarehouseSelection(User $user, string $replyText): bool
@@ -145,6 +209,104 @@ final class PendingProcurementClarificationService
     /**
      * @return array<string, mixed>
      */
+    /**
+     * @return array<string, mixed>
+     */
+    private function resumeLockedSupplierSelection(
+        User $user,
+        Conversation $conversation,
+        PendingProcurementClarification $pending,
+        string $replyText,
+        string $conversationKey,
+        string $idempotencyKey,
+    ): array {
+        $draftInput = $pending->payload['draft_input'] ?? null;
+        if (! is_array($draftInput)) {
+            $this->clear($pending);
+
+            return ['status' => 'corrupt_pending'];
+        }
+
+        $productId = (int) ($pending->payload['product_id'] ?? 0);
+        $replacementIntent = $this->draftPurchaseOrderMessageParser->extractDraftIntent($user, $replyText);
+        if ($replacementIntent !== null) {
+            $newProductId = (int) ($replacementIntent['lines'][0]['product_id'] ?? 0);
+            if ($newProductId > 0 && $newProductId !== $productId) {
+                $this->beginSupplierSelection(
+                    $user,
+                    $conversation,
+                    $replacementIntent,
+                    $newProductId,
+                    (int) ($replacementIntent['lines'][0]['quantity'] ?? 0),
+                    $replyText,
+                );
+
+                return [
+                    'status' => 'needs_clarification',
+                    'clarification_question' => $this->buildSupplierChoiceQuestion(
+                        $user,
+                        $newProductId,
+                        (int) ($replacementIntent['lines'][0]['quantity'] ?? 0),
+                    ),
+                ];
+            }
+        }
+
+        $supplier = $this->draftPurchaseOrderMessageParser->resolveSupplierByFreeTextHint($replyText);
+        if ($supplier === null) {
+            return [
+                'status' => 'needs_clarification',
+                'clarification_question' => 'That supplier was not found. '.$this->buildSupplierChoiceQuestion(
+                    $user,
+                    $productId,
+                    (int) ($pending->payload['quantity'] ?? 0),
+                ),
+            ];
+        }
+
+        $lineProductId = (int) ($draftInput['lines'][0]['product_id'] ?? 0);
+        $draftInput['supplier_id'] = $supplier->id;
+        $draftInput['lines'][0]['unit_cost'] = $this->draftPurchaseOrderMessageParser->defaultUnitCostForLine(
+            $supplier->id,
+            $lineProductId,
+        );
+
+        if (! empty($draftInput['lines'][0]['warehouse_id'])) {
+            try {
+                $proposal = $this->draftPurchaseOrderService->createProposal(
+                    $user,
+                    $conversationKey,
+                    $idempotencyKey,
+                    $draftInput,
+                );
+            } catch (PurchaseOrderProposalException $exception) {
+                return [
+                    'status' => 'proposal_failed',
+                    'message' => $exception->getMessage(),
+                ];
+            }
+
+            $this->clear($pending);
+
+            return [
+                'status' => 'proposal_created',
+                'proposal' => $proposal,
+                'message' => $this->formatProposalCreatedMessage($proposal),
+            ];
+        }
+
+        $this->beginWarehouseDestination($user, $conversation, $draftInput, (string) ($pending->payload['original_user_message'] ?? $replyText));
+
+        return [
+            'status' => 'needs_clarification',
+            'clarification_question' => $this->buildContextualWarehouseChoiceQuestion(
+                $user,
+                $lineProductId,
+                (int) ($draftInput['lines'][0]['quantity'] ?? 0),
+            ),
+        ];
+    }
+
     private function resumeLockedPending(
         User $user,
         Conversation $conversation,
@@ -240,6 +402,51 @@ final class PendingProcurementClarificationService
         ];
     }
 
+    /**
+     * @param  array<string, mixed>  $draftInput
+     * @return array{
+     *     status: string,
+     *     proposal?: array<string, mixed>,
+     *     message?: string
+     * }
+     */
+    public function tryCreateProposalFromDraftInput(
+        User $user,
+        Conversation $conversation,
+        array $draftInput,
+        string $conversationKey,
+        string $idempotencyKey,
+    ): array {
+        if (empty($draftInput['lines'][0]['warehouse_id'])) {
+            return ['status' => 'incomplete_draft'];
+        }
+
+        try {
+            $proposal = $this->draftPurchaseOrderService->createProposal(
+                $user,
+                $conversationKey,
+                $idempotencyKey,
+                $draftInput,
+            );
+        } catch (PurchaseOrderProposalException $exception) {
+            return [
+                'status' => 'proposal_failed',
+                'message' => $exception->getMessage(),
+            ];
+        }
+
+        PendingProcurementClarification::query()
+            ->where('conversation_id', $conversation->id)
+            ->where('user_id', $user->id)
+            ->delete();
+
+        return [
+            'status' => 'proposal_created',
+            'proposal' => $proposal,
+            'message' => $this->formatProposalCreatedMessage($proposal),
+        ];
+    }
+
     public function buildWarehouseChoiceQuestion(User $user): string
     {
         $warehouses = $this->warehouseLookupService->listReceivingWarehouses($user, 25);
@@ -250,6 +457,30 @@ final class PendingProcurementClarificationService
         }
 
         return 'Which warehouse should receive these slabs: '.implode(', ', $labels).'?';
+    }
+
+    public function buildContextualWarehouseChoiceQuestion(User $user, int $productId, int $quantity): string
+    {
+        $context = $this->draftPurchaseOrderMessageParser->describeProductLineForClarification($productId, $quantity);
+        $base = $this->buildWarehouseChoiceQuestion($user);
+
+        return 'For '.$context.', '.$base;
+    }
+
+    public function buildSupplierChoiceQuestion(User $user, int $productId, int $quantity): string
+    {
+        $context = $this->draftPurchaseOrderMessageParser->describeProductLineForClarification($productId, $quantity);
+        $names = Supplier::query()->orderBy('name')->limit(25)->pluck('name')
+            ->map(static fn ($name) => is_string($name) ? trim($name) : '')
+            ->filter(static fn (string $name) => $name !== '')
+            ->values()
+            ->all();
+
+        if ($names === []) {
+            return 'For '.$context.', which supplier should supply this draft purchase order? No suppliers are configured in the catalogue.';
+        }
+
+        return 'For '.$context.', which supplier should supply this draft purchase order: '.implode(', ', $names).'?';
     }
 
     /**

@@ -3,7 +3,9 @@
 namespace App\Services\AI\Context;
 
 use App\Models\Warehouse;
+use App\Services\AI\Grounding\ErpCrossDomainRequestDetector;
 use App\Services\AI\Grounding\LandedCostQuestionParser;
+use App\Services\AI\Grounding\PurchaseOrderCreationIntentDetector;
 use App\Services\AI\Grounding\PurchaseOrderSearchQuestionParser;
 use App\Support\ProductColorLexicon;
 
@@ -13,6 +15,8 @@ final class DeterministicFollowUpResolver
         private readonly LandedCostQuestionParser $landedCostQuestionParser,
         private readonly ProductColorLexicon $colorLexicon,
         private readonly PurchaseOrderSearchQuestionParser $purchaseOrderSearchQuestionParser,
+        private readonly PurchaseOrderCreationIntentDetector $purchaseOrderCreationIntentDetector,
+        private readonly ErpCrossDomainRequestDetector $crossDomainRequestDetector,
     ) {}
     public function tryExpand(
         string $followUp,
@@ -99,6 +103,10 @@ final class DeterministicFollowUpResolver
 
     private function expandOverdueSupplierFollowUp(string $followUp, string $anchorQuestion): ?string
     {
+        if ($this->crossDomainRequestDetector->isExplicitIndependentDomainRequest($followUp)) {
+            return null;
+        }
+
         if ($this->landedCostQuestionParser->extractPurchaseOrderId($followUp) !== null) {
             return null;
         }
@@ -125,6 +133,18 @@ final class DeterministicFollowUpResolver
 
     private function expandPurchaseOrderSearchFollowUp(string $followUp, string $anchorQuestion): ?string
     {
+        if ($this->shouldBlockCrossDomainPoSearchExpansion($followUp)) {
+            return null;
+        }
+
+        if (preg_match('/\b(?:only\s+)?(?:the\s+)?overdue(?:\s+ones?)?\b/i', trim($followUp)) === 1) {
+            return null;
+        }
+
+        if ($this->purchaseOrderCreationIntentDetector->isPurchaseOrderCreationRequest($followUp)) {
+            return null;
+        }
+
         $poId = $this->landedCostQuestionParser->extractPurchaseOrderId($followUp);
         if ($poId !== null) {
             $replaced = preg_replace('/\bPO\s*[-#]?\s*\d+/i', 'PO-'.$poId, $anchorQuestion, 1);
@@ -147,6 +167,23 @@ final class DeterministicFollowUpResolver
             }
 
             return $this->purchaseOrderSearchQuestionParser->buildCanonicalSearchQuestion($filters, $followUp);
+        }
+
+        if (preg_match('/\b(?:only\s+)?(?:from|for)\b/i', $followUp) === 1
+            && $this->isPurchaseOrderSearchThread($anchorQuestion, '')) {
+            $supplierHint = $this->purchaseOrderSearchQuestionParser->extractSupplierNameHint($followUp);
+            if (is_string($supplierHint) && $supplierHint !== '') {
+                $statusFromAnchor = $this->purchaseOrderSearchQuestionParser->extractStatus($anchorQuestion);
+                $filters = ['supplier_name' => $supplierHint];
+                if ($statusFromAnchor !== null) {
+                    $filters['status'] = $statusFromAnchor;
+                }
+
+                return $this->purchaseOrderSearchQuestionParser->buildCanonicalSearchQuestion(
+                    $filters,
+                    'List purchase orders for '.$supplierHint,
+                );
+            }
         }
 
         $supplier = $this->extractNamedEntityFollowUp($followUp, includePoPattern: false);
@@ -182,6 +219,10 @@ final class DeterministicFollowUpResolver
         string $previousQuestion,
         string $previousAnswer,
     ): ?ContextResolutionResult {
+        if ($this->crossDomainRequestDetector->isExplicitBroadeningInstruction($followUp)) {
+            return null;
+        }
+
         if (preg_match('/^(?:what|how)\s+about\s+(?P<variety>[A-Za-z][A-Za-z0-9\s\-]+)\s*\??$/iu', trim($followUp), $matches) === 1) {
             $variety = trim($matches['variety']);
             if ($variety !== ''
@@ -255,6 +296,10 @@ final class DeterministicFollowUpResolver
 
     private function expandGenericSupplierSwap(string $followUp, string $previousQuestion): ?ContextResolutionResult
     {
+        if ($this->crossDomainRequestDetector->isExplicitIndependentDomainRequest($followUp)) {
+            return null;
+        }
+
         if (preg_match('/^(what|how)\s+about\s+(?P<supplier>.+)\??$/iu', $followUp, $matches) === 1) {
             $supplier = trim($matches['supplier']);
             if ($supplier !== '' && preg_match('/supplier/i', $previousQuestion) === 1) {
@@ -302,6 +347,27 @@ final class DeterministicFollowUpResolver
         return null;
     }
 
+    private function shouldBlockCrossDomainPoSearchExpansion(string $followUp): bool
+    {
+        if (! $this->crossDomainRequestDetector->isExplicitIndependentDomainRequest($followUp)) {
+            return false;
+        }
+
+        if ($this->landedCostQuestionParser->extractPurchaseOrderId($followUp) === null) {
+            return true;
+        }
+
+        if (preg_match('/\bwhat\s+is\s+the\s+status\b/i', $followUp) === 1) {
+            return false;
+        }
+
+        if ($this->landedCostQuestionParser->isPurchaseOrderFollowUpPhrase($followUp)) {
+            return false;
+        }
+
+        return true;
+    }
+
     private function extractNamedEntityFollowUp(string $followUp, bool $includePoPattern): ?string
     {
         $trimmed = trim($followUp);
@@ -309,7 +375,16 @@ final class DeterministicFollowUpResolver
             return null;
         }
 
+        if ($this->crossDomainRequestDetector->isExplicitIndependentDomainRequest($trimmed)) {
+            return null;
+        }
+
         if ($this->landedCostQuestionParser->extractPurchaseOrderId($trimmed) !== null) {
+            return null;
+        }
+
+        if (preg_match('/\b(show|list|find|search|give me|what are)\b/i', $trimmed) === 1
+            && preg_match('/\b(products?|suppliers?|stock|slabs?|inventory|purchase\s+orders?|warehouses?)\b/i', $trimmed) === 1) {
             return null;
         }
 

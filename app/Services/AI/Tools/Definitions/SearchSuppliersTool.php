@@ -32,7 +32,7 @@ final class SearchSuppliersTool implements AiToolInterface
     {
         return new AiToolDefinition(
             name: $this->name(),
-            description: 'Search suppliers by name. Returns id, name, contact, and payment_terms only (no bank details). Purchasing only. Use before proposeDraftPurchaseOrder to obtain a real supplier_id.',
+            description: 'Search suppliers by name. Returns id, name, contact, and payment_terms only (no bank details). Purchasing only. Use before proposeDraftPurchaseOrder to obtain supplier_id from the supplier name in the user message.',
             parameters: [
                 'type' => 'object',
                 'additionalProperties' => false,

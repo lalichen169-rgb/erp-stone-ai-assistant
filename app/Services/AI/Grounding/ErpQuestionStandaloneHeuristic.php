@@ -15,6 +15,8 @@ final class ErpQuestionStandaloneHeuristic
         private readonly StockCountIntentDetector $stockCountIntent,
         private readonly StockCountQuestionParser $stockCountParser,
         private readonly PurchaseOrderSearchQuestionParser $purchaseOrderSearchParser,
+        private readonly PurchaseOrderCreationIntentDetector $purchaseOrderCreationIntentDetector,
+        private readonly ErpCrossDomainRequestDetector $crossDomainRequestDetector,
     ) {}
 
     public function isActionableStandalone(string $text): bool
@@ -22,6 +24,10 @@ final class ErpQuestionStandaloneHeuristic
         $trimmed = trim($text);
         if ($trimmed === '') {
             return false;
+        }
+
+        if ($this->crossDomainRequestDetector->isExplicitIndependentDomainRequest($trimmed)) {
+            return true;
         }
 
         if ($this->isActionableBankQuestion($trimmed)) {
@@ -40,6 +46,10 @@ final class ErpQuestionStandaloneHeuristic
             return true;
         }
 
+        if ($this->purchaseOrderCreationIntentDetector->isPurchaseOrderCreationRequest($trimmed)) {
+            return true;
+        }
+
         if (preg_match('/\boverdue\b.*\bpurchase\s+orders?\b/i', $trimmed) === 1) {
             return true;
         }
@@ -48,7 +58,8 @@ final class ErpQuestionStandaloneHeuristic
             return true;
         }
 
-        if (preg_match('/\bpurchase\s+orders?\b.*\b(status|ordered|received|draft)\b/i', $trimmed) === 1) {
+        if (! $this->purchaseOrderCreationIntentDetector->isPurchaseOrderCreationRequest($trimmed)
+            && preg_match('/\bpurchase\s+orders?\b.*\b(status|ordered|received|draft)\b/i', $trimmed) === 1) {
             return true;
         }
 

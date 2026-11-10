@@ -36,8 +36,8 @@ final class SearchProductsTool implements AiToolInterface, OllamaExclusiveTool
     public function definition(): AiToolDefinition
     {
         $description = $this->useCompactToolDescriptions()
-            ? 'Search products by sku, name, material, color, or thickness_cm. Returns id, sku, name, material, color, thickness_cm (no costs).'
-            : 'Search products by SKU, name, material, color, or thickness_cm. Returns id, sku, name, material, color, thickness_cm for each match (no costs). Use before draft PO proposals to obtain real product_id values.';
+            ? 'Search products by material, color, thickness_cm, name, or optional product_sku when the user stated one. Returns id, sku, name, material, color, thickness_cm (no costs).'
+            : 'Search catalogue products by material, color, thickness_cm, name, or optional product_sku when the user already said a SKU. Returns id, sku, name, material, color, thickness_cm (no costs). For draft PO proposals prefer resolveProductsForPurchase; never ask the user for SKU.';
 
         return new AiToolDefinition(
             name: $this->name(),
@@ -46,10 +46,10 @@ final class SearchProductsTool implements AiToolInterface, OllamaExclusiveTool
                 'type' => 'object',
                 'additionalProperties' => false,
                 'properties' => [
-                    'product_sku' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Exact SKU when known'],
-                    'name' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Partial product name'],
-                    'material' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Stone material type, e.g. Quartz, Granite (not the color name)'],
-                    'color' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Color/variety name, e.g. Calacatta'],
+                    'product_sku' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Optional; only when the user explicitly mentioned a SKU'],
+                    'name' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Partial product name when applicable'],
+                    'material' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Stone material type from the user message (not the variety)'],
+                    'color' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Color or variety from the user message'],
                     'thickness_cm' => ['type' => ['string', 'number'], 'description' => 'Thickness in centimeters as a decimal string, e.g. 3.00 for 3 cm'],
                     'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 50],
                 ],

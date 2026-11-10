@@ -11,6 +11,7 @@ final class StockCountIntentDetector
 {
     public function __construct(
         private readonly StockCountQuestionParser $parser,
+        private readonly PurchaseOrderCreationIntentDetector $purchaseOrderCreationIntentDetector,
     ) {}
 
     /**
@@ -33,6 +34,10 @@ final class StockCountIntentDetector
     {
         $trimmed = trim($text);
         if ($trimmed === '') {
+            return false;
+        }
+
+        if ($this->purchaseOrderCreationIntentDetector->isPurchaseOrderCreationRequest($trimmed)) {
             return false;
         }
 

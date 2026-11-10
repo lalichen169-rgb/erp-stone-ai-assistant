@@ -33,6 +33,8 @@ Route::middleware('auth:sanctum')->group(function (): void {
 
     Route::post('/purchase-order-proposals', [PurchaseOrderProposalController::class, 'store'])
         ->name('api.purchase-order-proposals.store');
+    Route::get('/purchase-order-proposals', [PurchaseOrderProposalController::class, 'index'])
+        ->name('api.purchase-order-proposals.index');
     Route::get('/purchase-order-proposals/{proposalId}', [PurchaseOrderProposalController::class, 'show'])
         ->name('api.purchase-order-proposals.show');
     Route::post('/purchase-order-proposals/{proposalId}/confirm', [PurchaseOrderProposalController::class, 'confirm'])

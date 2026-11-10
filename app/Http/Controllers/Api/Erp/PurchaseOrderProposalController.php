@@ -15,6 +15,18 @@ class PurchaseOrderProposalController extends Controller
 {
     public function __construct(private readonly DraftPurchaseOrderService $draftPurchaseOrderService) {}
 
+    public function index(ConversationScopedProposalRequest $request): JsonResponse
+    {
+        $rows = $this->draftPurchaseOrderService->listProposalsForConversation(
+            $request->user(),
+            $request->conversationKey(),
+        );
+
+        return response()->json([
+            'data' => $rows,
+        ]);
+    }
+
     public function store(CreatePurchaseOrderProposalRequest $request): JsonResponse
     {
         $user = $request->user();

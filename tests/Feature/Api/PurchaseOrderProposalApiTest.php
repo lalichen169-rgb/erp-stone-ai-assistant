@@ -59,6 +59,7 @@ class PurchaseOrderProposalApiTest extends TestCase
         $uuid = '00000000-0000-4000-8000-000000000001';
 
         $this->postJson('/api/purchase-order-proposals', [])->assertUnauthorized();
+        $this->getJson('/api/purchase-order-proposals?conversation_key=x')->assertUnauthorized();
         $this->getJson('/api/purchase-order-proposals/'.$uuid.'?conversation_key=x')->assertUnauthorized();
         $this->postJson('/api/purchase-order-proposals/'.$uuid.'/confirm?conversation_key=x')->assertUnauthorized();
         $this->deleteJson('/api/purchase-order-proposals/'.$uuid.'?conversation_key=x')->assertUnauthorized();
@@ -76,6 +77,9 @@ class PurchaseOrderProposalApiTest extends TestCase
             ->assertForbidden();
 
         $uuid = '00000000-0000-4000-8000-000000000002';
+
+        $this->getJson('/api/purchase-order-proposals?conversation_key=conv-api-001')
+            ->assertForbidden();
 
         $this->getJson('/api/purchase-order-proposals/'.$uuid.'?conversation_key=conv-api-001')
             ->assertForbidden();
@@ -167,6 +171,34 @@ class PurchaseOrderProposalApiTest extends TestCase
             ->assertJsonValidationErrors(['lines']);
 
         $this->assertSame(0, PurchaseOrder::count());
+    }
+
+    public function test_index_lists_proposals_scoped_to_conversation(): void
+    {
+        $product = $this->createCalacattaThreeCmDemoProduct();
+        $purchasing = $this->createPurchasingApiUser();
+        $supplier = $this->createSupplierWithName('List API Supplier');
+
+        ['json' => $created] = $this->createProposalViaApi($purchasing, [
+            'conversation_key' => 'conv-list-001',
+            'supplier_id' => $supplier->id,
+            'order_date' => '2026-11-06',
+            'freight_cost' => '10.00',
+            'lines' => [$this->proposalLine($product)],
+        ], 'idem-list-1');
+
+        $this->actingAsSanctum($purchasing);
+
+        $this->getJson('/api/purchase-order-proposals?conversation_key=conv-other')
+            ->assertOk()
+            ->assertJsonPath('data', []);
+
+        $index = $this->getJson('/api/purchase-order-proposals?conversation_key=conv-list-001')
+            ->assertOk();
+
+        $index->assertJsonPath('data.0.proposal_id', $created['proposal_id']);
+        $index->assertJsonPath('data.0.status', 'pending');
+        $index->assertJsonPath('data.0.supplier_name', 'List API Supplier');
     }
 
     public function test_owner_can_retrieve_and_snapshot_is_immutable(): void

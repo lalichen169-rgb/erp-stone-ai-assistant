@@ -42,6 +42,9 @@ class StockCountGroundingTest extends TestCase
         $this->assertFalse($detector->isWarehouseStockCountQuestion(
             'What is the landed cost of PO 12?',
         ));
+        $this->assertFalse($detector->isWarehouseStockCountQuestion(
+            'Create a draft PO for 5 slabs of 2cm Calacatta quartz from Demo Supplier — Central Texas Granite delivered to Dallas warehouse. Freight 500.',
+        ));
     }
 
     public function test_parser_resolves_two_cm_calacatta_at_austin_without_default_material(): void

@@ -33,7 +33,7 @@ final class ProposeDraftPurchaseOrderTool implements AiToolInterface
     {
         return new AiToolDefinition(
             name: $this->name(),
-            description: 'Create a pending draft purchase-order proposal only (no PO lines until human confirmation via API). Purchasing only. Conversation and idempotency are supplied by the server execution context, not model arguments.',
+            description: 'Create a pending draft purchase-order proposal only (no PO until human confirmation via API). Purchasing only. Ground product_id via resolveProductsForPurchase, supplier_id via searchSuppliers, unit_cost via validateSupplierProductOffering when available, and warehouse_id via resolveWarehouseForPurchase per line. Never ask the user for SKU to obtain product_id. Conversation and idempotency are supplied by the server, not model arguments.',
             parameters: [
                 'type' => 'object',
                 'additionalProperties' => false,

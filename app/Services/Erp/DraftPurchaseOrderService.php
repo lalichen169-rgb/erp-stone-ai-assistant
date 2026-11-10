@@ -113,6 +113,40 @@ class DraftPurchaseOrderService
     }
 
     /**
+     * Lightweight index for the current conversation scope (chat UI proposal picker).
+     *
+     * @return list<array{proposal_id: string, status: string, expires_at: string, supplier_name: ?string}>
+     */
+    public function listProposalsForConversation(User $user, string $conversationKey): array
+    {
+        $this->authorizeCreateDraftPurchaseOrders($user);
+
+        $conversationKey = $this->normalizeKey($conversationKey, 'conversation_key');
+
+        return PurchaseOrderProposal::query()
+            ->where('user_id', $user->id)
+            ->where('conversation_key', $conversationKey)
+            ->orderByDesc('created_at')
+            ->limit(50)
+            ->get()
+            ->map(function (PurchaseOrderProposal $proposal): array {
+                $payload = is_array($proposal->payload) ? $proposal->payload : [];
+                $supplierName = isset($payload['supplier_name']) && is_string($payload['supplier_name'])
+                    ? $payload['supplier_name']
+                    : null;
+
+                return [
+                    'proposal_id' => $proposal->id,
+                    'status' => $proposal->status->value,
+                    'expires_at' => $proposal->expires_at->toIso8601String(),
+                    'supplier_name' => $supplierName,
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function confirmProposal(User $user, string $proposalId, string $conversationKey): array

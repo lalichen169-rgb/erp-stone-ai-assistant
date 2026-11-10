@@ -39,6 +39,10 @@ BANK;
 
         $stockLine = $this->legacyStockGrounding();
 
+        $draftPoLine = $user->isPurchasing()
+            ? "\n".$this->purchasingDraftPoInstructions()
+            : '';
+
         return <<<TXT
 You are the Stone ERP AI assistant embedded in a B2B stone slab distributor application.
 
@@ -47,6 +51,7 @@ You are the Stone ERP AI assistant embedded in a B2B stone slab distributor appl
 {$bankingLine}
 
 {$stockLine}
+{$draftPoLine}
 
 Rules:
 - Use only the registered ERP tools for factual questions about inventory, purchase orders, overdue orders, landed cost (Purchasing only), and draft PO proposals (Purchasing only).
@@ -99,9 +104,9 @@ Tool argument grounding (ERP data model):
 - When checkStock returns found=true with slabs_on_hand, state that number. Do not treat filter_resolution as zero stock.
 - If checkStock returns ambiguous_product or product_not_found after a tool call, ask the user to clarify or use searchProducts; do not invent quantities.
 - Purchase order list/search: call searchPurchaseOrders with status and/or supplier_name when the user asks (draft-only is valid; no date range required). Sales may search PO status; never show unit costs or freight.
-- Purchasing draft POs: resolveProductsForPurchase for strict catalogue resolution (never guess product_id when ambiguous). resolveWarehouseForPurchase for each line destination (never guess warehouse_id). searchWarehouses lists valid destinations when the user must choose. validateSupplierProductOffering before proposing when supplier-product catalogue is enforced. calculateReplenishmentQuantity requires warehouse_id and uses that warehouse's on-hand stock only. Preserve direct purchase quantities exactly.
 - proposeDraftPurchaseOrder creates a pending proposal only; never confirm or state that a PO was created until the user confirms via the application.
 GROUND;
+        $toolGrounding .= $this->purchasingDraftPoInstructions();
 
         return <<<TXT
 You are the Stone ERP AI assistant embedded in a B2B stone slab distributor application.
@@ -151,11 +156,28 @@ Role: You may use registered cost and draft-PO tools. Landed cost only via getLa
 
 Facts: Use only registered tools. Never invent quantities, costs, supplier IDs, product IDs, warehouse IDs, or proposal IDs. Resolve products with resolveProductsForPurchase and warehouses with resolveWarehouseForPurchase (ask when ambiguous; use searchWarehouses to list options). Each proposeDraftPurchaseOrder line requires warehouse_id. calculateReplenishmentQuantity requires warehouse_id. Never reduce an explicit purchase quantity by stock.
 
+Draft PO user questions: never ask for SKU or product code alone. Clarify with variety, stone type, thickness, supplier, warehouse, quantity, freight, or ETA when tools require it. List resolveProductsForPurchase alternatives using material/color/thickness from tool data. Use validateSupplierProductOffering for unit_cost; do not ask the user to type prices when the catalogue supplies a cost.
+
 checkStock / searchProducts: material = stone type; color = variety. Single-site: thickness_cm + warehouse_name. All warehouses: all_warehouses=true without thickness_cm unless one thickness was requested.
 
 If tools fail or filters are ambiguous, clarify instead of guessing.
 
 Reply concisely in plain business language.
+TXT;
+    }
+
+    private function purchasingDraftPoInstructions(): string
+    {
+        return <<<'TXT'
+
+Purchasing draft purchase-order proposals:
+- Never ask the user for SKU, product code, or internal catalogue codes. Purchasers describe slabs by variety (color), stone type (material), thickness, quantity, supplier name, and destination warehouse.
+- Always call resolveProductsForPurchase first using attributes from the user message (color = variety, material = stone type, thickness_cm when stated). Use product_sku in tool arguments only when the user already stated a SKU in their message.
+- If resolution is ambiguous_product or missing_thickness, present alternatives from tool results (name, material, color, thickness) and ask the user to choose using those attributes—not SKU.
+- If status is not_found, say no catalogue product matched those attributes and invite refinement (variety, material, thickness)—do not request SKU.
+- searchSuppliers for supplier_id; validateSupplierProductOffering for catalogue unit_cost on each line when proposing; resolveWarehouseForPurchase (or searchWarehouses) for warehouse_id per line.
+- You may ask for: quantity, supplier (if missing), destination warehouse (if missing), thickness or material (when ambiguous), freight_cost or order date when required and not inferable, ETA when the user cares—never SKU alone.
+- Workflow order: resolveProductsForPurchase → searchSuppliers → validateSupplierProductOffering → resolveWarehouseForPurchase → proposeDraftPurchaseOrder. calculateReplenishmentQuantity requires warehouse_id and uses that warehouse's on-hand stock only. Preserve direct purchase quantities exactly.
 TXT;
     }
 }

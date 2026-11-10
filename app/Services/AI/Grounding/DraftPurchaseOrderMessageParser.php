@@ -7,6 +7,8 @@ use App\Models\Supplier;
 use App\Models\User;
 use App\Models\Warehouse;
 use App\Services\Erp\ProductCatalogResolutionService;
+use App\Services\Erp\WarehouseLookupService;
+use App\Support\ProductColorLexicon;
 use Illuminate\Support\Carbon;
 
 /**
@@ -17,6 +19,8 @@ final class DraftPurchaseOrderMessageParser
     public function __construct(
         private readonly PurchaseOrderCreationIntentDetector $purchaseOrderCreationIntentDetector,
         private readonly ProductCatalogResolutionService $productCatalogResolutionService,
+        private readonly WarehouseLookupService $warehouseLookupService,
+        private readonly ProductColorLexicon $productColorLexicon,
     ) {}
 
     public function messageMentionsKnownWarehouse(string $text): bool
@@ -58,10 +62,6 @@ final class DraftPurchaseOrderMessageParser
             return null;
         }
 
-        if ($this->messageMentionsKnownWarehouse($trimmed)) {
-            return null;
-        }
-
         $quantity = $this->extractQuantity($trimmed);
         if ($quantity === null) {
             return null;
@@ -84,18 +84,134 @@ final class DraftPurchaseOrderMessageParser
 
         $productId = (int) $resolution['product_id'];
 
+        $line = [
+            'product_id' => $productId,
+            'quantity' => $quantity,
+            'unit_cost' => $this->defaultUnitCostForLine($supplier->id, $productId),
+        ];
+
+        $warehouseId = $this->resolveDestinationWarehouseId($user, $trimmed);
+        if ($warehouseId !== null) {
+            $line['warehouse_id'] = $warehouseId;
+        } elseif ($this->messageMentionsKnownWarehouse($trimmed)) {
+            return null;
+        }
+
         return [
             'supplier_id' => $supplier->id,
             'order_date' => Carbon::now()->toDateString(),
             'freight_cost' => $this->extractFreightCost($trimmed),
             'lines' => [
-                [
-                    'product_id' => $productId,
-                    'quantity' => $quantity,
-                    'unit_cost' => $this->defaultUnitCostForLine($supplier->id, $productId),
-                ],
+                $line,
             ],
         ];
+    }
+
+    /**
+     * Incomplete explicit draft-PO requests: product + quantity resolved, supplier and/or warehouse still missing.
+     *
+     * @return array{
+     *     draft_input: array<string, mixed>,
+     *     missing: list<'supplier'|'warehouse'>,
+     *     product_id: int,
+     *     quantity: int
+     * }|null
+     */
+    public function extractIncompleteDraftContext(User $user, string $text): ?array
+    {
+        if (! $user->isPurchasing()) {
+            return null;
+        }
+
+        $trimmed = trim($text);
+        if ($trimmed === '' || ! $this->purchaseOrderCreationIntentDetector->isPurchaseOrderCreationRequest($trimmed)) {
+            return null;
+        }
+
+        if ($this->extractDraftIntent($user, $trimmed) !== null) {
+            return null;
+        }
+
+        $quantity = $this->extractQuantity($trimmed);
+        if ($quantity === null) {
+            return null;
+        }
+
+        $productFilters = $this->extractProductFilters($trimmed);
+        if ($productFilters === null) {
+            return null;
+        }
+
+        $resolution = $this->productCatalogResolutionService->resolve($productFilters);
+        if (($resolution['status'] ?? '') !== 'unique_match' || empty($resolution['product_id'])) {
+            return null;
+        }
+
+        $productId = (int) $resolution['product_id'];
+        $supplier = $this->resolveSupplier($trimmed);
+        $warehouseId = $this->resolveDestinationWarehouseId($user, $trimmed);
+
+        if ($this->messageMentionsKnownWarehouse($trimmed) && $warehouseId === null) {
+            return null;
+        }
+
+        $missing = [];
+        if ($supplier === null) {
+            $missing[] = 'supplier';
+        }
+        if ($warehouseId === null) {
+            $missing[] = 'warehouse';
+        }
+
+        if ($missing === []) {
+            return null;
+        }
+
+        $line = [
+            'product_id' => $productId,
+            'quantity' => $quantity,
+            'unit_cost' => $supplier !== null
+                ? $this->defaultUnitCostForLine($supplier->id, $productId)
+                : '1.00',
+        ];
+
+        if ($warehouseId !== null) {
+            $line['warehouse_id'] = $warehouseId;
+        }
+
+        $draftInput = [
+            'order_date' => Carbon::now()->toDateString(),
+            'freight_cost' => $this->extractFreightCost($trimmed),
+            'lines' => [
+                $line,
+            ],
+        ];
+
+        if ($supplier !== null) {
+            $draftInput['supplier_id'] = $supplier->id;
+        }
+
+        return [
+            'draft_input' => $draftInput,
+            'missing' => $missing,
+            'product_id' => $productId,
+            'quantity' => $quantity,
+        ];
+    }
+
+    public function resolveSupplierByFreeTextHint(string $text): ?Supplier
+    {
+        $trimmed = trim($text);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        $fromPattern = $this->resolveSupplier($trimmed);
+        if ($fromPattern !== null) {
+            return $fromPattern;
+        }
+
+        return $this->lookupSupplierByNameHint($trimmed);
     }
 
     /**
@@ -192,11 +308,12 @@ final class DraftPurchaseOrderMessageParser
             $filters['thickness_cm'] = number_format((float) $matches[1], 2, '.', '');
         }
 
-        if (preg_match('/\b(carrara|calacatta|statuario|thassos)\b/i', $text, $matches) === 1) {
-            $filters['color'] = ucfirst(strtolower($matches[1]));
+        $color = $this->productColorLexicon->matchInText($text);
+        if ($color !== null) {
+            $filters['color'] = $color;
         }
 
-        if (preg_match('/\b(marble|quartz|granite|porcelain)\b/i', $text, $matches) === 1) {
+        if (preg_match('/\b(marble|quartz|granite|porcelain|travertine)\b/i', $text, $matches) === 1) {
             $filters['material'] = ucfirst(strtolower($matches[1]));
         }
 
@@ -209,11 +326,21 @@ final class DraftPurchaseOrderMessageParser
 
     private function resolveSupplier(string $text): ?Supplier
     {
-        if (preg_match('/\bfrom\s+(.+?)(?:\?|\.|$)/iu', $text, $matches) !== 1) {
+        if (preg_match('/\bfrom\s+(.+?)(?:\s+delivered\s+to\b|\?|\.|$)/iu', $text, $matches) !== 1) {
             return null;
         }
 
         $hint = trim($matches[1]);
+        if ($hint === '') {
+            return null;
+        }
+
+        return $this->lookupSupplierByNameHint($hint);
+    }
+
+    private function lookupSupplierByNameHint(string $hint): ?Supplier
+    {
+        $hint = trim($hint);
         if ($hint === '') {
             return null;
         }
@@ -238,7 +365,23 @@ final class DraftPurchaseOrderMessageParser
         return null;
     }
 
-    private function defaultUnitCostForLine(int $supplierId, int $productId): string
+    public function describeProductLineForClarification(int $productId, int $quantity): string
+    {
+        $product = Product::query()->find($productId);
+        if ($product === null) {
+            return $quantity.' slabs';
+        }
+
+        $parts = [$quantity.' slabs of '.$product->name];
+        $thickness = is_string($product->thickness_cm) ? trim($product->thickness_cm) : '';
+        if ($thickness !== '') {
+            $parts[] = '('.$thickness.' cm)';
+        }
+
+        return implode(' ', $parts);
+    }
+
+    public function defaultUnitCostForLine(int $supplierId, int $productId): string
     {
         $catalog = \App\Models\SupplierProduct::query()
             ->where('supplier_id', $supplierId)
@@ -261,5 +404,38 @@ final class DraftPurchaseOrderMessageParser
         }
 
         return preg_match('/\b'.preg_quote($needle, '/').'\b/iu', $haystack) === 1;
+    }
+
+    private function resolveDestinationWarehouseId(User $user, string $text): ?int
+    {
+        $hint = $this->extractDeliveryWarehouseHint($text);
+        if ($hint === null || $hint === '') {
+            return null;
+        }
+
+        $resolution = $this->warehouseLookupService->resolve($user, ['name' => $hint]);
+        if (($resolution['status'] ?? '') !== 'unique_match' || empty($resolution['warehouse_id'])) {
+            return null;
+        }
+
+        return (int) $resolution['warehouse_id'];
+    }
+
+    private function extractDeliveryWarehouseHint(string $text): ?string
+    {
+        $trimmed = trim($text);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        if (preg_match('/\bdelivered\s+to\s+(.+?)(?:\s+warehouse)?(?:\.|,|\s+freight\b|\s+for\s+|$)/iu', $trimmed, $matches) === 1) {
+            return $this->normalizeWarehouseHint(trim($matches[1]));
+        }
+
+        if (preg_match('/\bto\s+(.+?)\s+warehouse\b/iu', $trimmed, $matches) === 1) {
+            return $this->normalizeWarehouseHint(trim($matches[1]));
+        }
+
+        return null;
     }
 }

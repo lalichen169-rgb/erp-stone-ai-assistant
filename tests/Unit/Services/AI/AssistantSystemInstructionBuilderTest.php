@@ -53,6 +53,16 @@ class AssistantSystemInstructionBuilderTest extends TestCase
         $this->assertStringContainsString('warehouse_id', $text);
         $this->assertStringContainsString('resolveProductsForPurchase', $text);
         $this->assertStringContainsString('confirm', $text);
+        $this->assertStringContainsString('never ask for sku', strtolower($text));
+    }
+
+    public function test_baseline_purchasing_draft_po_never_requests_sku_from_user(): void
+    {
+        $purchasing = $this->createPurchasingApiUser();
+        $text = app(AssistantSystemInstructionBuilder::class)->build($purchasing, false);
+
+        $this->assertStringContainsString('Never ask the user for SKU', $text);
+        $this->assertStringContainsString('resolveProductsForPurchase', $text);
     }
 
     public function test_compact_tool_descriptions_reduce_json_without_changing_sales_tool_count(): void
